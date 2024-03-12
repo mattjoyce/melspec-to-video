@@ -1,0 +1,17 @@
+audio_files:
+audio_visualization:
+  cmap: bone
+  mel_buffer_multiplier: 100
+  playhead_position: 0.50
+  time_per_frame: 10
+mel_spectrogram:
+  db_high: 0
+  db_low: -70
+  f_high: 30000
+  f_low: 50
+  hop_length: 256
+  n_fft: 2048
+video:
+  frame_rate: 30
+  height: 200
+  width: 400
