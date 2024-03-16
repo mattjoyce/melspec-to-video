@@ -1,9 +1,10 @@
 import subprocess
 import time
-import os
+import math
+
 import logging
 import argparse
-import pprint
+
 
 import librosa
 import librosa.display
@@ -12,6 +13,9 @@ import numpy as np
 import yaml
 from matplotlib.colors import LinearSegmentedColormap
 from PIL import Image
+
+import threading
+import psutil
 
 
 """
@@ -37,6 +41,19 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
+# these are used as globasl to track memory usgae
+memory_usage = 0
+max_mem=0
+
+def monitor_memory_usage(interval=1):
+    """Monitors memory usage at specified intervals (in seconds) and updates the global memory_usage variable."""
+    global memory_usage, max_mem
+    while True:
+        memory = psutil.virtual_memory()
+        memory_usage = (memory.used / memory.total) * 100
+        if max_mem<memory_usage:
+            max_mem=memory_usage
+        time.sleep(interval)
 
 def load_config(config_path):
     """Load YAML configuration file."""
@@ -44,18 +61,72 @@ def load_config(config_path):
         config = yaml.safe_load(file)
     return config
 
+def calculate_buffer(total_duration, time_per_frame, mel_buffer_multiplier, buffering):
+    #if not buffering, read the whole thing, set the buffer to be big enough 
+    if buffering:
+        # the ammount of audio data needed to produce the wide mel buffer
+        audio_buffer = ( time_per_frame * mel_buffer_multiplier)  
+        # we add enough to service the sliding window tail
+        extended_audio_buffer = ( audio_buffer + time_per_frame )
+    else:
+        # make the buffer as big as the audio  
+        audio_buffer=total_duration
+        extended_audio_buffer=total_duration+time_per_frame
+    return audio_buffer, extended_audio_buffer
+
+def tune_buffer(mel_buffer_multiplier, frame_width, width_limit):
+    global max_mem
+    # Calculate the maximum buffer multiplier based on the image width limit
+    max_mel_buffer_multiplier = int(width_limit / frame_width) - 2
+    
+    # Adjust the buffer size based on memory usage
+    if max_mem < 90:
+        adjusted_multiplier = int(mel_buffer_multiplier * 1.5)
+    elif max_mem > 90:  # Memory usage is high, reduce buffer size
+        adjusted_multiplier = int(mel_buffer_multiplier * 0.8)
+    else:
+        adjusted_multiplier = mel_buffer_multiplier
+    
+    # Cap the adjusted_multiplier at the max_mel_buffer_multiplier
+    adjusted_multiplier = min(adjusted_multiplier, max_mel_buffer_multiplier)
+    
+    # Log the adjusted (and possibly capped) buffer size
+    if adjusted_multiplier != mel_buffer_multiplier:
+        logging.info(f'Adjusted buffer to {adjusted_multiplier}')
+    else:
+        logging.info('Buffer size remains unchanged.')
+    
+    # Reset max memory usage after adjustment
+    max_mem = 0
+    
+    return adjusted_multiplier
+
+
+def is_max_mel_image_width_safe(total_duration, time_per_frame, frame_width, limit):
+    # we need to know the most audio we might handle
+    max_audio_duration=total_duration+time_per_frame
+
+    # Determine the maximum number of frames needed
+    max_num_frames = math.ceil(max_audio_duration / time_per_frame) +1  # Round up to ensure all audio is covered, include an extra frame for sliding window
+
+    # Calculate the maximum possible wide Mel image width
+    max_wide_mel_image_width = (max_num_frames * frame_width)
+
+    return max_wide_mel_image_width <= limit, max_wide_mel_image_width  # is safe?
+
 
 def process_audio(config, args):
+    global max_mem, memory_usage
     # extract the config and argumates to variables.
     audio_fsp = args.input
     video_fsp = args.output
     logging.info(f"Audio file in : {audio_fsp}")
     logging.info(f"Video file out: {video_fsp}")
 
-
     sr = args.sr    
     audio_start = args.start
     audio_duration = args.duration
+    
     #TODO    
     """ logging.info(f"Audio start offset (secs) : {audio_start}")
         if audio_duration:
@@ -97,21 +168,32 @@ def process_audio(config, args):
     # config for the spectrogram
     #   time_per_frame, is the duration of aution represented in 1 x frame_width
     time_per_frame = config["audio_visualization"]["time_per_frame"]
+ 
+    # Maximum allowable image width
+    max_image_width_px = 65536  # Safe limit, matplot or png
+    
+    is_safe_size, calculated_size=is_max_mel_image_width_safe(total_duration, time_per_frame, frame_width, max_image_width_px)
+
+
+    # Check if the maximum possible width exceeds the maximum allowable width
+    if is_safe_size and not args.buffing:
+        error_message = (f"Error: The maximum possible width of the wide Mel image ({calculated_size} pixels) "
+                         f"exceeds the maximum allowable width ({max_image_width_px} pixels). "
+                         "Please consider reducing the audio length or using buffering.")
+        logging.error(error_message)
+        raise ValueError(error_message)
+
 
     #   a multiplyer  that determines how much audio to process each cycle
     #   smaller numbers will take longer, higher numbers will use a lot of memory
     #   1 minute displayed in a frame x 20 = 20 minutes of audio processed
     mel_buffer_multiplier = config["audio_visualization"]["mel_buffer_multiplier"]
 
-    audio_buffer = (
-        time_per_frame * mel_buffer_multiplier
-    )  # the ammount of audio data needed to produce the wide mel buffer
-    extended_audio_buffer = (
-        audio_buffer + time_per_frame
-    )  # we add enough to service the sliding window tail
+    audio_buffer, extended_audio_buffer = calculate_buffer(total_duration, time_per_frame, mel_buffer_multiplier, args.buffering)
 
     logging.info(f"Full frame duration : {time_per_frame} secs")
-    logging.info(f"Audio Buffer : {audio_buffer} secs")
+    logging.info(f"Audio Buffer     : {audio_buffer} secs")
+    logging.info(f"Audio Buffer ext : {extended_audio_buffer} secs")
 
     # https://librosa.org/doc/latest/generated/librosa.feature.melspectrogram.html
     f_low = config.get("mel_spectrogram", {}).get("f_low", 0)
@@ -199,6 +281,8 @@ def process_audio(config, args):
             fmin=f_low,
             fmax=f_high,
         )
+        print(f"Current memory usage: {max_mem}")
+
         logging.info(f"Processing time: {(time.time() - start_time):.2f} seconds")
 
         if maxpower:
@@ -290,6 +374,12 @@ def process_audio(config, args):
             current_position_secs += audio_buffer
         logging.critical(f'current_position = {current_position_secs}')
 
+        if args.buffering:
+            mel_buffer_multiplier=tune_buffer(mel_buffer_multiplier,frame_width,max_image_width_px)
+            
+        # reset audio buffer sizes
+        audio_buffer, extended_audio_buffer = calculate_buffer(total_duration, time_per_frame, mel_buffer_multiplier, args.buffering)
+
     # Close ffmpeg's stdin to signal end of input
     ffmpeg_process.stdin.close()
 
@@ -298,6 +388,11 @@ def process_audio(config, args):
     logging.info(f'Total frames rendered : {total_frames_rendered}')
 
 def main():
+
+    # Start the memory monitoring thread
+    monitor_thread = threading.Thread(target=monitor_memory_usage, args=(1,), daemon=True)
+    monitor_thread.start()
+
     parser = argparse.ArgumentParser(
         description="Generate a scrolling spectrogram video from an audio file."
     )
@@ -326,6 +421,14 @@ def main():
         help="Custom upper reference power for normalization, affecting spectrogram sensitivity. Overrides all auto-calculation.",
         type=float,
     )
+
+    parser.add_argument(
+        "--buffering",
+        help="Use buffering, to split the processing - for large files.",
+        action="store_true",
+        default=False
+    )
+
     parser.add_argument("-in", "--input", required=True, help="Input audio file path.")
     parser.add_argument(
         "-out",
@@ -338,10 +441,6 @@ def main():
     args = parser.parse_args()
 
     config = load_config(args.config)
-
-    # Pretty print using pformat to get a string representation
-    formatted_config = pprint.pformat(config, indent=4)
-    logging.info(f"Config Loaded: {formatted_config}")
 
     process_audio(config, args)
 
