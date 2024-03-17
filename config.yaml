@@ -1,0 +1,24 @@
+audio_files:
+  Woollamia-March-2024-DogHowl.wav:
+    global_max_power: 273
+  ZOOM0018-post.wav:
+    global_max_power: 2110
+  test.wav:
+    global_max_power: 2019
+audio_visualization:
+  mel_buffer_scale: 20
+  mel_buffer_multiplier: 20
+  time_per_frame: 120
+  cmap : 'copper'
+mel_spectrogram:
+  db_high: 80
+  db_low: 0
+  f_high: 20000
+  f_low: 20
+  hop_length: 512
+  n_fft: 8192
+  maxpower : 2000
+video:
+  frame_rate: 30
+  height: 200
+  width: 1280

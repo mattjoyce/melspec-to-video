@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import yaml
 from matplotlib.colors import LinearSegmentedColormap
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 import threading
 import psutil
@@ -44,6 +44,47 @@ logging.basicConfig(
 # these are used as globasl to track memory usgae
 memory_usage = 0
 max_mem=0
+
+def create_playhead_overlay(frame_number, frame_rate, image_size, playhead_position, line_color=(255, 0, 0, 128), line_width=2):
+    """
+    Create an overlay image with a semi-transparent playhead line.
+
+    Parameters:
+    - image_size: A tuple (width, height) specifying the size of the overlay.
+    - playhead_position: A float representing the horizontal position of the playhead (0 to 1).
+    - line_color: A tuple (R, G, B, A) specifying the color and opacity of the line.
+    - line_width: The width of the line in pixels.
+
+    Returns:
+    - An Image object representing the overlay with the playhead line.
+    """
+    # Create a transparent overlay
+    overlay = Image.new('RGBA', image_size, (255, 255, 255, 0))
+    draw = ImageDraw.Draw(overlay)
+    
+    # Calculate the x position of the playhead line
+    playhead_x = int(playhead_position * image_size[0])
+    
+    # Draw the semi-transparent playhead line on the overlay
+    draw.line([(playhead_x, 0), (playhead_x, image_size[1])], fill=line_color, width=line_width)
+
+    # Calculate the time at the playhead
+    total_seconds = frame_number / frame_rate
+    hours = math.floor(total_seconds / 3600)
+    minutes = math.floor((total_seconds % 3600) / 60)
+    seconds = math.floor(total_seconds % 60)
+    tenths = int((total_seconds - math.floor(total_seconds)) * 10)  # Get tenths of a second
+    
+    # Format the time mark as text
+    time_mark = f"{hours:02d}:{minutes:02d}:{seconds:02d}.{tenths}"
+    
+    # Draw the time mark text near the playhead line
+    # Adjust the font size and position as needed
+    font = ImageFont.load_default()
+    text_position = (playhead_x + 5, 10)  # Position the text slightly to the right of the playhead line
+    draw.text(text_position, time_mark, fill=line_color, font=font)
+    
+    return overlay
 
 def monitor_memory_usage(interval=1):
     """Monitors memory usage at specified intervals (in seconds) and updates the global memory_usage variable."""
@@ -112,7 +153,10 @@ def is_max_mel_image_width_safe(total_duration, time_per_frame, frame_width, lim
     # Calculate the maximum possible wide Mel image width
     max_wide_mel_image_width = (max_num_frames * frame_width)
 
-    return max_wide_mel_image_width <= limit, max_wide_mel_image_width  # is safe?
+    is_safe = (max_wide_mel_image_width <= limit)
+    logging.info(f'limit : {limit}')
+    logging.info(f'max_wide_mel_image_width: {max_wide_mel_image_width}')
+    return is_safe, max_wide_mel_image_width  # is safe?
 
 
 def process_audio(config, args):
@@ -176,7 +220,7 @@ def process_audio(config, args):
 
 
     # Check if the maximum possible width exceeds the maximum allowable width
-    if is_safe_size and not args.buffing:
+    if not is_safe_size and not args.buffering:
         error_message = (f"Error: The maximum possible width of the wide Mel image ({calculated_size} pixels) "
                          f"exceeds the maximum allowable width ({max_image_width_px} pixels). "
                          "Please consider reducing the audio length or using buffering.")
@@ -208,33 +252,41 @@ def process_audio(config, args):
     logging.info(f"n_fft : {n_ftt}")
     logging.info(f"hop length : {hop_length}")
 
-    ### Start the ffmpeg process
-    ffmpeg_cmd = [
+
+    ffmpeg_cmd_cpu = [
         "ffmpeg",
         "-y",
-        "-f",
-        "rawvideo",
-        "-vcodec",
-        "rawvideo",
-        "-s",
-        f"{frame_width}x{frame_height}",  # Set frame size
-        "-pix_fmt",
-        "rgb24",  # Set pixel format
-        "-r",
-        f"{frame_rate}",
-        "-i",
-        "-",  # Input from stdin
-        "-c:v",
-        "h264_nvenc",  # nvidia acceleration
-        "-crf",
-        "18",  # Constant rate factor for quality
-        "-preset",
-        "fast",  # Preset for encoding speed
-        "-vf",
-        "format=yuv420p",  # Pixel format for compatibility
+        "-f", "rawvideo",
+        "-vcodec", "rawvideo",
+        "-s", f"{frame_width}x{frame_height}",  # Set frame size
+        "-pix_fmt", "rgb24",  # Set pixel format
+        "-r", f"{frame_rate}",
+        "-i", "-",  # Input from stdin
+        "-c:v", "libx264",  # Use libx264 for H.264 encoding
+        "-crf", "23",  # Adjust CRF as needed for balance between quality and file size
+        "-preset", "fast",  # Preset for encoding speed/quality trade-off (options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow)
+        "-vf", "format=yuv420p",  # Pixel format for compatibility
         f"{video_fsp}",
     ]
-    ffmpeg_process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
+
+
+    ### Start the ffmpeg process
+    ffmpeg_cmd_gpu = [
+        "ffmpeg",
+        "-y",
+        "-f", "rawvideo",
+        "-vcodec", "rawvideo",
+        "-s", f"{frame_width}x{frame_height}",  # Set frame size
+        "-pix_fmt", "rgb24",  # Set pixel format
+        "-r", f"{frame_rate}",
+        "-i", "-",  # Input from stdin
+        "-c:v", "h264_nvenc",  # nvidia acceleration
+        "-crf", "17",  # Constant rate factor for quality
+        "-preset", "slow",  # Preset for encoding speed
+        "-vf", "format=yuv420p",  # Pixel format for compatibility
+        f"{video_fsp}",
+    ]
+    ffmpeg_process = subprocess.Popen(ffmpeg_cmd_gpu, stdin=subprocess.PIPE)
 
     ##### start work
     current_position_secs = 0
@@ -353,8 +405,12 @@ def process_audio(config, args):
             # Slice the wide mel image to extract the frame
             frame_image = wide_mel_image.crop((start_pos, 0, end_pos, frame_height))
 
+            playhead_overlay=create_playhead_overlay(total_frames_rendered+1,frame_rate, [frame_width,frame_height],playhead,(128,128,128,64),5)
+
+            combined_image = Image.alpha_composite(frame_image, playhead_overlay)
+
             # Convert the image to bytes
-            cropped_frame_rgb = frame_image.convert("RGB")
+            cropped_frame_rgb = combined_image.convert("RGB")
             cropped_frame_bytes = cropped_frame_rgb.tobytes()
 
             # Write the frame bytes to ffmpeg's stdin
