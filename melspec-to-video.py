@@ -263,12 +263,12 @@ def process_audio(config, args):
         "-r", f"{frame_rate}",
         "-i", "-",  # Input from stdin
         "-c:v", "libx264",  # Use libx264 for H.264 encoding
-        "-crf", "23",  # Adjust CRF as needed for balance between quality and file size
+        "-crf", "17",  # Adjust CRF as needed for balance between quality and file size
         "-preset", "fast",  # Preset for encoding speed/quality trade-off (options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow)
         "-vf", "format=yuv420p",  # Pixel format for compatibility
+        "-progress", "pipe:1",
         f"{video_fsp}",
     ]
-
 
     ### Start the ffmpeg process
     ffmpeg_cmd_gpu = [
@@ -284,9 +284,15 @@ def process_audio(config, args):
         "-crf", "17",  # Constant rate factor for quality
         "-preset", "slow",  # Preset for encoding speed
         "-vf", "format=yuv420p",  # Pixel format for compatibility
+        "-loglevel", "level+warning",        
         f"{video_fsp}",
     ]
-    ffmpeg_process = subprocess.Popen(ffmpeg_cmd_gpu, stdin=subprocess.PIPE)
+
+    ffmpeg_cmd=ffmpeg_cmd_gpu
+    if args.cpu :
+        ffmpeg_cmd = ffmpeg_cmd_cpu
+
+    ffmpeg_process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
 
     ##### start work
     current_position_secs = 0
@@ -478,6 +484,13 @@ def main():
         type=float,
     )
 
+    parser.add_argument(
+        "--cpu",
+        help="use CPU for processing if GPU is not available.",
+        action="store_true",
+        default=False
+
+    )
     parser.add_argument(
         "--buffering",
         help="Use buffering, to split the processing - for large files.",
