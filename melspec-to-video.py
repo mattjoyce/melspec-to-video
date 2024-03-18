@@ -265,8 +265,7 @@ def process_audio(config, args):
         "-c:v", "libx264",  # Use libx264 for H.264 encoding
         "-crf", "17",  # Adjust CRF as needed for balance between quality and file size
         "-preset", "fast",  # Preset for encoding speed/quality trade-off (options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow)
-        "-vf", "format=yuv420p",  # Pixel format for compatibility
-        "-progress", "pipe:1",
+        "-vf", "format=yuv420p",  # Pixel format for compatibility    
         f"{video_fsp}",
     ]
 
@@ -284,7 +283,6 @@ def process_audio(config, args):
         "-crf", "17",  # Constant rate factor for quality
         "-preset", "slow",  # Preset for encoding speed
         "-vf", "format=yuv420p",  # Pixel format for compatibility
-        "-loglevel", "level+warning",        
         f"{video_fsp}",
     ]
 
@@ -292,7 +290,9 @@ def process_audio(config, args):
     if args.cpu :
         ffmpeg_cmd = ffmpeg_cmd_cpu
 
-    ffmpeg_process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
+    with open('ffmpeg_log.txt', 'wb') as log_file:
+        ffmpeg_process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stdout=log_file, stderr=subprocess.STDOUT)
+
 
     ##### start work
     current_position_secs = 0
