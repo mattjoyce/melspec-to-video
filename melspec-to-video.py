@@ -43,9 +43,17 @@ logging.basicConfig(
 
 # these are used as globasl to track memory usgae
 memory_usage = 0
-max_mem=0
+max_mem = 0  # maximum allowed mem usage in %
 
-def create_playhead_overlay(frame_number, frame_rate, image_size, playhead_position, line_color=(255, 0, 0, 128), line_width=2):
+
+def create_playhead_overlay(
+    frame_number,
+    frame_rate,
+    image_size,
+    playhead_position,
+    line_color=(255, 0, 0, 128),
+    line_width=2,
+):
     """
     Create an overlay image with a semi-transparent playhead line.
 
@@ -59,32 +67,42 @@ def create_playhead_overlay(frame_number, frame_rate, image_size, playhead_posit
     - An Image object representing the overlay with the playhead line.
     """
     # Create a transparent overlay
-    overlay = Image.new('RGBA', image_size, (255, 255, 255, 0))
+    overlay = Image.new("RGBA", image_size, (255, 255, 255, 0))
     draw = ImageDraw.Draw(overlay)
-    
+
     # Calculate the x position of the playhead line
     playhead_x = int(playhead_position * image_size[0])
-    
+
     # Draw the semi-transparent playhead line on the overlay
-    draw.line([(playhead_x, 0), (playhead_x, image_size[1])], fill=line_color, width=line_width)
+    draw.line(
+        [(playhead_x, 0), (playhead_x, image_size[1])],
+        fill=line_color,
+        width=line_width,
+    )
 
     # Calculate the time at the playhead
     total_seconds = frame_number / frame_rate
     hours = math.floor(total_seconds / 3600)
     minutes = math.floor((total_seconds % 3600) / 60)
     seconds = math.floor(total_seconds % 60)
-    tenths = int((total_seconds - math.floor(total_seconds)) * 10)  # Get tenths of a second
-    
+    tenths = int(
+        (total_seconds - math.floor(total_seconds)) * 10
+    )  # Get tenths of a second
+
     # Format the time mark as text
     time_mark = f"{hours:02d}:{minutes:02d}:{seconds:02d}.{tenths}"
-    
+
     # Draw the time mark text near the playhead line
     # Adjust the font size and position as needed
     font = ImageFont.load_default()
-    text_position = (playhead_x + 5, 10)  # Position the text slightly to the right of the playhead line
+    text_position = (
+        playhead_x + 5,
+        10,
+    )  # Position the text slightly to the right of the playhead line
     draw.text(text_position, time_mark, fill=line_color, font=font)
-    
+
     return overlay
+
 
 def monitor_memory_usage(interval=1):
     """Monitors memory usage at specified intervals (in seconds) and updates the global memory_usage variable."""
@@ -92,9 +110,10 @@ def monitor_memory_usage(interval=1):
     while True:
         memory = psutil.virtual_memory()
         memory_usage = (memory.used / memory.total) * 100
-        if max_mem<memory_usage:
-            max_mem=memory_usage
+        if max_mem < memory_usage:
+            max_mem = memory_usage
         time.sleep(interval)
+
 
 def load_config(config_path):
     """Load YAML configuration file."""
@@ -102,24 +121,26 @@ def load_config(config_path):
         config = yaml.safe_load(file)
     return config
 
+
 def calculate_buffer(total_duration, time_per_frame, mel_buffer_multiplier, buffering):
-    #if not buffering, read the whole thing, set the buffer to be big enough 
+    # if not buffering, read the whole thing, set the buffer to be big enough
     if buffering:
         # the ammount of audio data needed to produce the wide mel buffer
-        audio_buffer = ( time_per_frame * mel_buffer_multiplier)  
+        audio_buffer = time_per_frame * mel_buffer_multiplier
         # we add enough to service the sliding window tail
-        extended_audio_buffer = ( audio_buffer + time_per_frame )
+        extended_audio_buffer = audio_buffer + time_per_frame
     else:
-        # make the buffer as big as the audio  
-        audio_buffer=total_duration
-        extended_audio_buffer=total_duration+time_per_frame
+        # make the buffer as big as the audio
+        audio_buffer = total_duration
+        extended_audio_buffer = total_duration + time_per_frame
     return audio_buffer, extended_audio_buffer
+
 
 def tune_buffer(mel_buffer_multiplier, frame_width, width_limit):
     global max_mem
     # Calculate the maximum buffer multiplier based on the image width limit
     max_mel_buffer_multiplier = int(width_limit / frame_width) - 2
-    
+
     # Adjust the buffer size based on memory usage
     if max_mem < 90:
         adjusted_multiplier = int(mel_buffer_multiplier * 1.5)
@@ -127,35 +148,37 @@ def tune_buffer(mel_buffer_multiplier, frame_width, width_limit):
         adjusted_multiplier = int(mel_buffer_multiplier * 0.8)
     else:
         adjusted_multiplier = mel_buffer_multiplier
-    
+
     # Cap the adjusted_multiplier at the max_mel_buffer_multiplier
     adjusted_multiplier = min(adjusted_multiplier, max_mel_buffer_multiplier)
-    
+
     # Log the adjusted (and possibly capped) buffer size
     if adjusted_multiplier != mel_buffer_multiplier:
-        logging.info(f'Adjusted buffer to {adjusted_multiplier}')
+        logging.info(f"Adjusted buffer to {adjusted_multiplier}")
     else:
-        logging.info('Buffer size remains unchanged.')
-    
+        logging.info("Buffer size remains unchanged.")
+
     # Reset max memory usage after adjustment
     max_mem = 0
-    
+
     return adjusted_multiplier
 
 
 def is_max_mel_image_width_safe(total_duration, time_per_frame, frame_width, limit):
     # we need to know the most audio we might handle
-    max_audio_duration=total_duration+time_per_frame
+    max_audio_duration = total_duration + time_per_frame
 
     # Determine the maximum number of frames needed
-    max_num_frames = math.ceil(max_audio_duration / time_per_frame) +1  # Round up to ensure all audio is covered, include an extra frame for sliding window
+    max_num_frames = (
+        math.ceil(max_audio_duration / time_per_frame) + 1
+    )  # Round up to ensure all audio is covered, include an extra frame for sliding window
 
     # Calculate the maximum possible wide Mel image width
-    max_wide_mel_image_width = (max_num_frames * frame_width)
+    max_wide_mel_image_width = max_num_frames * frame_width
 
-    is_safe = (max_wide_mel_image_width <= limit)
-    logging.info(f'limit : {limit}')
-    logging.info(f'max_wide_mel_image_width: {max_wide_mel_image_width}')
+    is_safe = max_wide_mel_image_width <= limit
+    logging.info(f"limit : {limit}")
+    logging.info(f"max_wide_mel_image_width: {max_wide_mel_image_width}")
     return is_safe, max_wide_mel_image_width  # is safe?
 
 
@@ -167,11 +190,11 @@ def process_audio(config, args):
     logging.info(f"Audio file in : {audio_fsp}")
     logging.info(f"Video file out: {video_fsp}")
 
-    sr = args.sr    
+    sr = args.sr
     audio_start = args.start
     audio_duration = args.duration
-    
-    #TODO    
+
+    # TODO
     """ logging.info(f"Audio start offset (secs) : {audio_start}")
         if audio_duration:
             logging.info(f"Audio clip duration (secs) : {audio_duration}") """
@@ -192,7 +215,9 @@ def process_audio(config, args):
     frame_width = config.get("video", {}).get("width", 800)
     frame_height = config.get("video", {}).get("height", 200)
     frame_rate = config.get("video", {}).get("frame_rate", 30)
-    logging.info(f"Output Video : {frame_width}px x {frame_height}px @ {frame_rate}fps ")
+    logging.info(
+        f"Output Video : {frame_width}px x {frame_height}px @ {frame_rate}fps "
+    )
 
     # get the cofig used to create the mel scale spectrograms
     #   the color pallate
@@ -206,34 +231,37 @@ def process_audio(config, args):
     # 0 is hard left of the frame, 0.5 is centre
     playhead = config.get("audio_visualization", {}).get("playhead_position", 0.0)
 
-
     logging.info(f"Spectrogram Pallette : {colormap} ")
 
     # config for the spectrogram
     #   time_per_frame, is the duration of aution represented in 1 x frame_width
     time_per_frame = config["audio_visualization"]["time_per_frame"]
- 
+
     # Maximum allowable image width
     max_image_width_px = 65536  # Safe limit, matplot or png
-    
-    is_safe_size, calculated_size=is_max_mel_image_width_safe(total_duration, time_per_frame, frame_width, max_image_width_px)
 
+    is_safe_size, calculated_size = is_max_mel_image_width_safe(
+        total_duration, time_per_frame, frame_width, max_image_width_px
+    )
 
     # Check if the maximum possible width exceeds the maximum allowable width
     if not is_safe_size and not args.buffering:
-        error_message = (f"Error: The maximum possible width of the wide Mel image ({calculated_size} pixels) "
-                         f"exceeds the maximum allowable width ({max_image_width_px} pixels). "
-                         "Please consider reducing the audio length or using buffering.")
+        error_message = (
+            f"Error: The maximum possible width of the wide Mel image ({calculated_size} pixels) "
+            f"exceeds the maximum allowable width ({max_image_width_px} pixels). "
+            "Please consider reducing the audio length or using buffering."
+        )
         logging.error(error_message)
         raise ValueError(error_message)
-
 
     #   a multiplyer  that determines how much audio to process each cycle
     #   smaller numbers will take longer, higher numbers will use a lot of memory
     #   1 minute displayed in a frame x 20 = 20 minutes of audio processed
     mel_buffer_multiplier = config["audio_visualization"]["mel_buffer_multiplier"]
 
-    audio_buffer, extended_audio_buffer = calculate_buffer(total_duration, time_per_frame, mel_buffer_multiplier, args.buffering)
+    audio_buffer, extended_audio_buffer = calculate_buffer(
+        total_duration, time_per_frame, mel_buffer_multiplier, args.buffering
+    )
 
     logging.info(f"Full frame duration : {time_per_frame} secs")
     logging.info(f"Audio Buffer     : {audio_buffer} secs")
@@ -252,20 +280,29 @@ def process_audio(config, args):
     logging.info(f"n_fft : {n_ftt}")
     logging.info(f"hop length : {hop_length}")
 
-
     ffmpeg_cmd_cpu = [
         "ffmpeg",
         "-y",
-        "-f", "rawvideo",
-        "-vcodec", "rawvideo",
-        "-s", f"{frame_width}x{frame_height}",  # Set frame size
-        "-pix_fmt", "rgb24",  # Set pixel format
-        "-r", f"{frame_rate}",
-        "-i", "-",  # Input from stdin
-        "-c:v", "libx264",  # Use libx264 for H.264 encoding
-        "-crf", "17",  # Adjust CRF as needed for balance between quality and file size
-        "-preset", "fast",  # Preset for encoding speed/quality trade-off (options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow)
-        "-vf", "format=yuv420p",  # Pixel format for compatibility    
+        "-f",
+        "rawvideo",
+        "-vcodec",
+        "rawvideo",
+        "-s",
+        f"{frame_width}x{frame_height}",  # Set frame size
+        "-pix_fmt",
+        "rgb24",  # Set pixel format
+        "-r",
+        f"{frame_rate}",
+        "-i",
+        "-",  # Input from stdin
+        "-c:v",
+        "libx264",  # Use libx264 for H.264 encoding
+        "-crf",
+        "17",  # Adjust CRF as needed for balance between quality and file size
+        "-preset",
+        "fast",  # Preset for encoding speed/quality trade-off (options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow)
+        "-vf",
+        "format=yuv420p",  # Pixel format for compatibility
         f"{video_fsp}",
     ]
 
@@ -273,33 +310,44 @@ def process_audio(config, args):
     ffmpeg_cmd_gpu = [
         "ffmpeg",
         "-y",
-        "-f", "rawvideo",
-        "-vcodec", "rawvideo",
-        "-s", f"{frame_width}x{frame_height}",  # Set frame size
-        "-pix_fmt", "rgb24",  # Set pixel format
-        "-r", f"{frame_rate}",
-        "-i", "-",  # Input from stdin
-        "-c:v", "h264_nvenc",  # nvidia acceleration
-        "-crf", "17",  # Constant rate factor for quality
-        "-preset", "slow",  # Preset for encoding speed
-        "-vf", "format=yuv420p",  # Pixel format for compatibility
+        "-f",
+        "rawvideo",
+        "-vcodec",
+        "rawvideo",
+        "-s",
+        f"{frame_width}x{frame_height}",  # Set frame size
+        "-pix_fmt",
+        "rgb24",  # Set pixel format
+        "-r",
+        f"{frame_rate}",
+        "-i",
+        "-",  # Input from stdin
+        "-c:v",
+        "h264_nvenc",  # nvidia acceleration
+        "-crf",
+        "17",  # Constant rate factor for quality
+        "-preset",
+        "slow",  # Preset for encoding speed
+        "-vf",
+        "format=yuv420p",  # Pixel format for compatibility
         f"{video_fsp}",
     ]
 
-    ffmpeg_cmd=ffmpeg_cmd_gpu
-    if args.cpu :
+    ffmpeg_cmd = ffmpeg_cmd_gpu
+    if args.cpu:
         ffmpeg_cmd = ffmpeg_cmd_cpu
 
-    with open('ffmpeg_log.txt', 'wb') as log_file:
-        ffmpeg_process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stdout=log_file, stderr=subprocess.STDOUT)
-
+    with open("ffmpeg_log.txt", "wb") as log_file:
+        ffmpeg_process = subprocess.Popen(
+            ffmpeg_cmd, stdin=subprocess.PIPE, stdout=log_file, stderr=subprocess.STDOUT
+        )
 
     ##### start work
     current_position_secs = 0
     total_frames_rendered = 0
     while current_position_secs < total_duration:
         logging.info(f"Starting Chunk")
-        logging.critical(f'current_position = {current_position_secs}')
+        logging.critical(f"current_position = {current_position_secs}")
         ## check if this is the last chunk
         is_last_chunk = (current_position_secs + audio_buffer) >= total_duration
         if is_last_chunk:
@@ -324,7 +372,9 @@ def process_audio(config, args):
         # playhead positioning
         if current_position_secs == 0:
             silence = np.zeros(int(sr * time_per_frame * playhead))
-            logging.warning(f'playhead offset : {len(silence)} samples, {len(silence)/sr} secs')
+            logging.warning(
+                f"playhead offset : {len(silence)} samples, {len(silence)/sr} secs"
+            )
             y = np.concatenate((silence, y))
 
         logging.info("Calculate mel data")
@@ -352,7 +402,7 @@ def process_audio(config, args):
                 S, ref=np.max, amin=10 ** (db_low / 10.0), top_db=db_high - db_low
             )
 
-        logging.info(f'Upper power : {np.max(S)}')
+        logging.info(f"Upper power : {np.max(S)}")
 
         # Calculate the width of the spectrogram image based on the scaling_factor
 
@@ -389,18 +439,18 @@ def process_audio(config, args):
         # Load the wide mel image using PIL
         wide_mel_image = Image.open("wide_mel_spectrogram.png")
 
-        logging.info(f'audio buffer duration: {audio_buffer} secs')
+        logging.info(f"audio buffer duration: {audio_buffer} secs")
         num_frames = int(audio_buffer * frame_rate)
-        logging.info(f'Number of frames in cycle : {num_frames}')
+        logging.info(f"Number of frames in cycle : {num_frames}")
 
         # Get the width of the image
         image_width = (
             wide_mel_image.width - frame_width
         )  # don;t include the extended buffer
-        logging.info(f'adjusted image width : {image_width}')
+        logging.info(f"adjusted image width : {image_width}")
 
         step_px = image_width / num_frames  # number of pixels to slide for each frame
-        logging.info(f'Pixel Step for frame : {step_px}')
+        logging.info(f"Pixel Step for frame : {step_px}")
         # Iterate through the wide mel image to create individual frames
         for i in range(num_frames):
             # Calculate the start and end positions for slicing
@@ -411,7 +461,14 @@ def process_audio(config, args):
             # Slice the wide mel image to extract the frame
             frame_image = wide_mel_image.crop((start_pos, 0, end_pos, frame_height))
 
-            playhead_overlay=create_playhead_overlay(total_frames_rendered+1,frame_rate, [frame_width,frame_height],playhead,(128,128,128,64),5)
+            playhead_overlay = create_playhead_overlay(
+                total_frames_rendered + 1,
+                frame_rate,
+                [frame_width, frame_height],
+                playhead,
+                (128, 128, 128, 64),
+                5,
+            )
 
             combined_image = Image.alpha_composite(frame_image, playhead_overlay)
 
@@ -421,38 +478,47 @@ def process_audio(config, args):
 
             # Write the frame bytes to ffmpeg's stdin
             ffmpeg_process.stdin.write(cropped_frame_bytes)
-            total_frames_rendered+=1
+            total_frames_rendered += 1
 
-            if current_position_secs == 0 and i==0:
-            # Save the frame as an image file (adjust the filename as needed)
-                frame_image.save(f'frame_{i}.png')
+            if current_position_secs == 0 and i == 0:
+                # Save the frame as an image file (adjust the filename as needed)
+                frame_image.save(f"frame_{i}.png")
                 print("-------------------------------------SAVE")
 
         # increment chunk
 
         if current_position_secs == 0:  # first chunk
-            current_position_secs += audio_buffer - (time_per_frame * playhead)  # account for offset silence
+            current_position_secs += audio_buffer - (
+                time_per_frame * playhead
+            )  # account for offset silence
         else:
             current_position_secs += audio_buffer
-        logging.critical(f'current_position = {current_position_secs}')
+        logging.critical(f"current_position = {current_position_secs}")
 
         if args.buffering:
-            mel_buffer_multiplier=tune_buffer(mel_buffer_multiplier,frame_width,max_image_width_px)
-            
+            mel_buffer_multiplier = tune_buffer(
+                mel_buffer_multiplier, frame_width, max_image_width_px
+            )
+
         # reset audio buffer sizes
-        audio_buffer, extended_audio_buffer = calculate_buffer(total_duration, time_per_frame, mel_buffer_multiplier, args.buffering)
+        audio_buffer, extended_audio_buffer = calculate_buffer(
+            total_duration, time_per_frame, mel_buffer_multiplier, args.buffering
+        )
 
     # Close ffmpeg's stdin to signal end of input
     ffmpeg_process.stdin.close()
 
     # Wait for ffmpeg to finish encoding
     ffmpeg_process.wait()
-    logging.info(f'Total frames rendered : {total_frames_rendered}')
+    logging.info(f"Total frames rendered : {total_frames_rendered}")
+
 
 def main():
 
     # Start the memory monitoring thread
-    monitor_thread = threading.Thread(target=monitor_memory_usage, args=(1,), daemon=True)
+    monitor_thread = threading.Thread(
+        target=monitor_memory_usage, args=(1,), daemon=True
+    )
     monitor_thread.start()
 
     parser = argparse.ArgumentParser(
@@ -488,14 +554,13 @@ def main():
         "--cpu",
         help="use CPU for processing if GPU is not available.",
         action="store_true",
-        default=False
-
+        default=False,
     )
     parser.add_argument(
         "--buffering",
         help="Use buffering, to split the processing - for large files.",
         action="store_true",
-        default=False
+        default=False,
     )
 
     parser.add_argument("-in", "--input", required=True, help="Input audio file path.")
