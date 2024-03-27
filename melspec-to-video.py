@@ -227,15 +227,19 @@ def process_audio(config, args):
         logging.warning("'Colormap not found, using 'magma'")
         colormap = "magma"
 
-    # get the playhead position from config.
-    # 0 is hard left of the frame, 0.5 is centre
-    playhead = config.get("audio_visualization", {}).get("playhead_position", 0.0)
-
     logging.info(f"Spectrogram Pallette : {colormap} ")
 
     # config for the spectrogram
     #   time_per_frame, is the duration of aution represented in 1 x frame_width
     time_per_frame = config["audio_visualization"]["time_per_frame"]
+
+
+    # get the playhead position from config.
+    # 0 is hard left of the frame, 0.5 is centre
+    playhead = config.get("audio_visualization", {}).get("playhead_position", 0.0)
+    lead_in_silence_duration = time_per_frame * playhead
+    tail_silence_duration = time_per_frame * (1 - playhead)
+
 
     # Maximum allowable image width
     max_image_width_px = 65536  # Safe limit, matplot or png
@@ -345,16 +349,38 @@ def process_audio(config, args):
     ##### start work
     current_position_secs = 0
     total_frames_rendered = 0
+
+    # the while loop is focussed on the actual audio durations, not silence padding
     while current_position_secs < total_duration:
         logging.info(f"Starting Chunk")
         logging.critical(f"current_position = {current_position_secs}")
         ## check if this is the last chunk
         is_last_chunk = (current_position_secs + audio_buffer) >= total_duration
+
         if is_last_chunk:
-            # resize audio buffer to match remaining audio
-            remaining_duration = total_duration - current_position_secs
+            # Calculate the duration of tail silence based on the playhead position
+            tail_silence_duration = time_per_frame * (1 - playhead)
+
+            # Adjust remaining_duration to include the actual audio left plus the tail silence
+            remaining_duration = total_duration - current_position_secs + tail_silence_duration
+
+            # Since this is the last chunk, the audio buffer needs to accommodate the remaining audio plus the tail silence
             audio_buffer = remaining_duration
-            extended_audio_buffer = remaining_duration
+
+            # No next chunk to interleave with, so extended_audio_buffer is set equal to audio_buffer
+            extended_audio_buffer = audio_buffer
+
+            # Convert the duration of silence into a corresponding image width
+            # This assumes a linear relationship between time and image width as used in the rest of the video
+            silence_image_width = int(frame_width * (tail_silence_duration / time_per_frame))
+
+            # Now adjust the calculation of wide_mel_image_width for the last chunk to include the visual silence
+            proportion_of_full_chunk = remaining_duration / (time_per_frame * mel_buffer_multiplier)
+            wide_mel_image_width = int((frame_width * mel_buffer_multiplier) * proportion_of_full_chunk)
+
+            # Append the visual silence to the wide Mel image width
+            wide_mel_image_width += silence_image_width
+
 
         # Load audio segment
         logging.info("Loading audio segment")
@@ -371,11 +397,20 @@ def process_audio(config, args):
         # first chunk only
         # playhead positioning
         if current_position_secs == 0:
-            silence = np.zeros(int(sr * time_per_frame * playhead))
+            silence = np.zeros(int(sr * lead_in_silence_duration))
             logging.warning(
-                f"playhead offset : {len(silence)} samples, {len(silence)/sr} secs"
+                f"playhead leadin duration : {len(silence)} samples, {len(silence)/sr} secs"
             )
             y = np.concatenate((silence, y))
+
+
+        if is_last_chunk:
+            silence = np.zeros(int(sr * tail_silence_duration))
+            logging.warning(
+                f"playhead playout duration : {len(silence)} samples, {len(silence)/sr} secs"
+            )
+            y = np.concatenate((y,silence))
+
 
         logging.info("Calculate mel data")
         start_time = time.time()
