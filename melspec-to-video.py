@@ -13,6 +13,9 @@ import numpy as np
 import psutil
 import yaml
 from PIL import Image, ImageDraw, ImageFont
+import soundfile as sf
+from tqdm import tqdm
+import sys
 
 # Mel Scale Spectrogram Video from Audio
 
@@ -39,6 +42,19 @@ logging.basicConfig(
 # these are used as globasl to track memory usgae
 memory_usage = 0
 max_mem = 0  # maximum allowed mem usage in %
+
+
+def load_and_resample_mono(audio_path, target_sr=22050):
+    # Load and resample audio file
+    data, samplerate = sf.read(audio_path)
+
+    # if there are multiple dimensions, it's not mono, avarage them
+    if data.ndim > 1:
+        logging.info(f"Converting to mono")
+        data = np.mean(data, axis=1)  # Convert to mono
+
+    data_resampled = librosa.resample(data, orig_sr=samplerate, target_sr=target_sr)
+    return data_resampled, target_sr
 
 
 def create_playhead_overlay(
@@ -198,15 +214,14 @@ def process_audio(config: dict[str, Any], args: Any) -> bool:
     audio_start = args.start
     audio_duration = args.duration
 
+    maxpower: Final[int] = (
+        config.get("audio_files", {}).get(audio_fsp, {}).get("max_power", None)
+    )
+
     # TODO
     """ logging.info(f"Audio start offset (secs) : {audio_start}")
         if audio_duration:
             logging.info(f"Audio clip duration (secs) : {audio_duration}") """
-
-    if args.maxpower:
-        maxpower = args.maxpower
-    else:
-        maxpower = config.get("mel_spectrogram", {}).get("maxpower", None)
 
     ##loads the file
     source_audio_duration: Final[float] = librosa.get_duration(path=audio_fsp)
@@ -570,6 +585,81 @@ def process_audio(config: dict[str, Any], args: Any) -> bool:
     return True
 
 
+def profile_audio(config: dict[str, Any], args: Any) -> dict[str, Any]:
+    """Function to derive the global max power reference from an audio file."""
+    # Initialization and configuration extraction
+    audio_fsp = args.input
+    logging.info(f"Audio file in: {audio_fsp}")
+    target_sr = args.sr
+    logging.info(f"Target Sample Rate: {target_sr}")
+
+    # Configuration for Mel spectrogram
+    f_low = config.get("mel_spectrogram", {}).get("f_low", 0)
+    f_high = config.get("mel_spectrogram", {}).get("f_high", None)
+    hop_length = config.get("mel_spectrogram", {}).get("hop_length", 512)
+    n_fft = config.get("mel_spectrogram", {}).get("n_fft", 2048)
+    db_low = config.get("mel_spectrogram", {}).get("db_low", 60)
+    db_high = config.get("mel_spectrogram", {}).get("db_high", 0)
+    frame_height = config.get("video", {}).get("height", 200)
+
+    # Load and resample the audio
+    y, sr = load_and_resample_mono(audio_fsp, target_sr)
+    chunk_duration = 60
+    samples_per_chunk = int(sr * chunk_duration)
+    max_power_values = []
+    print(f"db_low {db_low}")
+    print(f"db_high {db_high}")
+    # Process each chunk
+    for i in tqdm(range(0, len(y), samples_per_chunk)):
+        y_chunk = y[i : i + samples_per_chunk]
+        S = librosa.feature.melspectrogram(
+            y=y_chunk,
+            sr=sr,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            n_mels=frame_height,
+            fmin=f_low,
+            fmax=f_high,
+        )
+        maxpower = np.max(S)
+        # Append the maximum dB value from this chunk
+        max_power_values.append(maxpower)
+
+    # Return the maximum dB value found across all chunks
+    return {
+        "max_power": float(np.max(max_power_values)),
+        "sample_count": len(y),
+        "sample_rate": sr,
+    }
+
+
+def update_config(config, config_path, audio_path, profile):
+    # Ensure the "audio_files" section exists
+    if "audio_files" not in config:
+        config["audio_files"] = {}
+
+    # Update the specific audio file's profile within "audio_files"
+    if audio_path not in config["audio_files"]:
+        config["audio_files"][audio_path] = {}
+
+    # Update the profile for the specific audio file
+    config["audio_files"][audio_path]["max_power"] = float(profile["max_power"])
+    config["audio_files"][audio_path]["sample_rate"] = profile["sample_rate"]
+    config["audio_files"][audio_path]["sample_count"] = profile["sample_count"]
+
+    # Try to save the updated configuration back to the YAML file
+    try:
+        with open(config_path, "w") as file:
+            yaml.safe_dump(config, file)
+        logging.info("Configuration updated successfully.")
+    except Exception as e:
+        logging.error(f"Failed to update configuration: {e}")
+        # Consider whether to terminate the program or handle the error differently
+        raise  # Re-throw the exception for the caller to handle
+
+    return config
+
+
 def main():
 
     # Start the memory monitoring thread
@@ -601,11 +691,6 @@ def main():
         type=int,
         default=22050,
     )
-    parser.add_argument(
-        "--maxpower",
-        help="Custom upper reference power for normalization, affecting spectrogram sensitivity. Overrides all auto-calculation.",
-        type=float,
-    )
 
     parser.add_argument(
         "--cpu",
@@ -621,6 +706,7 @@ def main():
     )
 
     parser.add_argument("-in", "--input", required=True, help="Input audio file path.")
+
     parser.add_argument(
         "-out",
         "--output",
@@ -632,6 +718,18 @@ def main():
     args = parser.parse_args()
 
     config = load_config(args.config)
+
+    maxpower = config.get("audio_files", {}).get(args.input, {}).get("max_power", None)
+    sample_rate = (
+        config.get("audio_files", {}).get(args.input, {}).get("sample_rate", None)
+    )
+    sample_count = (
+        config.get("audio_files", {}).get(args.input, {}).get("sample_count", None)
+    )
+    if not maxpower or not sample_rate or not sample_count:
+        profile = profile_audio(config, args)
+        print(profile)
+        update_config(config, args.config, args.input, profile)
 
     process_audio(config, args)
 
