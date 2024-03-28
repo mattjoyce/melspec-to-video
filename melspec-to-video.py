@@ -17,7 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 import threading
 import psutil
 
-
+from typing import Final
 """
 Mel Scale Spectrogram Video from Audio
 
@@ -122,7 +122,7 @@ def load_config(config_path):
     return config
 
 
-def calculate_buffer(total_duration, time_per_frame, mel_buffer_multiplier, buffering):
+def calculate_buffer(source_audio_duration, time_per_frame, mel_buffer_multiplier, buffering):
     # if not buffering, read the whole thing, set the buffer to be big enough
     if buffering:
         # the ammount of audio data needed to produce the wide mel buffer
@@ -131,8 +131,8 @@ def calculate_buffer(total_duration, time_per_frame, mel_buffer_multiplier, buff
         extended_audio_buffer = audio_buffer + time_per_frame
     else:
         # make the buffer as big as the audio
-        audio_buffer = total_duration
-        extended_audio_buffer = total_duration + time_per_frame
+        audio_buffer = source_audio_duration
+        extended_audio_buffer = source_audio_duration + time_per_frame
     return audio_buffer, extended_audio_buffer
 
 
@@ -164,9 +164,9 @@ def tune_buffer(mel_buffer_multiplier, frame_width, width_limit):
     return adjusted_multiplier
 
 
-def is_max_mel_image_width_safe(total_duration, time_per_frame, frame_width, limit):
+def is_max_mel_image_width_safe(source_audio_duration, time_per_frame, frame_width, limit):
     # we need to know the most audio we might handle
-    max_audio_duration = total_duration + time_per_frame
+    max_audio_duration = source_audio_duration + time_per_frame
 
     # Determine the maximum number of frames needed
     max_num_frames = (
@@ -183,14 +183,18 @@ def is_max_mel_image_width_safe(total_duration, time_per_frame, frame_width, lim
 
 
 def process_audio(config, args):
+    #these are used to track memory usage and provide warnings
     global max_mem, memory_usage
+
     # extract the config and argumates to variables.
     audio_fsp = args.input
     video_fsp = args.output
     logging.info(f"Audio file in : {audio_fsp}")
     logging.info(f"Video file out: {video_fsp}")
 
-    sr = args.sr
+    sr: Final = args.sr
+    logging.info(f"Audio Sample Rate : {sr}")
+
     audio_start = args.start
     audio_duration = args.duration
 
@@ -205,8 +209,8 @@ def process_audio(config, args):
         maxpower = config.get("mel_spectrogram", {}).get("maxpower", None)
 
     ##loads the file
-    total_duration = librosa.get_duration(path=audio_fsp)
-    logging.info(f"Total duration (secs): {total_duration}")
+    source_audio_duration : Final = librosa.get_duration(path=audio_fsp)
+    logging.info(f"Total duration (secs): {source_audio_duration}")
 
     logging.info(f"Resample rate : {sr} hz")
     logging.info(f"Upper Reference Power : {maxpower}")
@@ -245,7 +249,7 @@ def process_audio(config, args):
     max_image_width_px = 65536  # Safe limit, matplot or png
 
     is_safe_size, calculated_size = is_max_mel_image_width_safe(
-        total_duration, time_per_frame, frame_width, max_image_width_px
+        source_audio_duration, time_per_frame, frame_width, max_image_width_px
     )
 
     # Check if the maximum possible width exceeds the maximum allowable width
@@ -264,7 +268,7 @@ def process_audio(config, args):
     mel_buffer_multiplier = config["audio_visualization"]["mel_buffer_multiplier"]
 
     audio_buffer, extended_audio_buffer = calculate_buffer(
-        total_duration, time_per_frame, mel_buffer_multiplier, args.buffering
+        source_audio_duration, time_per_frame, mel_buffer_multiplier, args.buffering
     )
 
     logging.info(f"Full frame duration : {time_per_frame} secs")
@@ -351,18 +355,18 @@ def process_audio(config, args):
     total_frames_rendered = 0
 
     # the while loop is focussed on the actual audio durations, not silence padding
-    while current_position_secs < total_duration:
+    while current_position_secs < source_audio_duration:
         logging.info(f"Starting Chunk")
         logging.critical(f"current_position = {current_position_secs}")
         ## check if this is the last chunk
-        is_last_chunk = (current_position_secs + audio_buffer) >= total_duration
+        is_last_chunk = (current_position_secs + audio_buffer) >= source_audio_duration
 
         if is_last_chunk:
             # Calculate the duration of tail silence based on the playhead position
             tail_silence_duration = time_per_frame * (1 - playhead)
 
             # Adjust remaining_duration to include the actual audio left plus the tail silence
-            remaining_duration = total_duration - current_position_secs + tail_silence_duration
+            remaining_duration = source_audio_duration - current_position_secs + tail_silence_duration
 
             # Since this is the last chunk, the audio buffer needs to accommodate the remaining audio plus the tail silence
             audio_buffer = remaining_duration
@@ -537,7 +541,7 @@ def process_audio(config, args):
 
         # reset audio buffer sizes
         audio_buffer, extended_audio_buffer = calculate_buffer(
-            total_duration, time_per_frame, mel_buffer_multiplier, args.buffering
+            source_audio_duration, time_per_frame, mel_buffer_multiplier, args.buffering
         )
 
     # Close ffmpeg's stdin to signal end of input
