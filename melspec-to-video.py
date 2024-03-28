@@ -4,7 +4,7 @@ import math
 import subprocess
 import threading
 import time
-from typing import Final, Any
+from typing import Final, Any, List
 
 import librosa
 import librosa.display
@@ -118,13 +118,13 @@ def load_config(config_path):
 
 
 def calculate_buffer(
-    source_audio_duration, seconds_in_view, mel_buffer_multiplier, buffering
+    source_audio_duration, seconds_in_view, audio_visual_span, buffering
 ):
     """Function Calculate buffer size"""
     # if not buffering, read the whole thing, set the buffer to be big enough
     if buffering:
         # the ammount of audio data needed to produce the wide mel buffer
-        audio_buffer = seconds_in_view * mel_buffer_multiplier
+        audio_buffer = seconds_in_view * audio_visual_span
         # we add enough to service the sliding window tail
         extended_audio_buffer = audio_buffer + seconds_in_view
     else:
@@ -134,24 +134,24 @@ def calculate_buffer(
     return audio_buffer, extended_audio_buffer
 
 
-def tune_buffer(mel_buffer_multiplier, frame_width, width_limit):
+def tune_buffer(audio_visual_span, frame_width, width_limit):
     global max_mem
     # Calculate the maximum buffer multiplier based on the image width limit
-    max_mel_buffer_multiplier = int(width_limit / frame_width) - 2
+    max_audio_visual_span = int(width_limit / frame_width) - 2
 
     # Adjust the buffer size based on memory usage
     if max_mem < 90:
-        adjusted_multiplier = int(mel_buffer_multiplier * 1.5)
+        adjusted_multiplier = int(audio_visual_span * 1.5)
     elif max_mem > 90:  # Memory usage is high, reduce buffer size
-        adjusted_multiplier = int(mel_buffer_multiplier * 0.8)
+        adjusted_multiplier = int(audio_visual_span * 0.8)
     else:
-        adjusted_multiplier = mel_buffer_multiplier
+        adjusted_multiplier = audio_visual_span
 
-    # Cap the adjusted_multiplier at the max_mel_buffer_multiplier
-    adjusted_multiplier = min(adjusted_multiplier, max_mel_buffer_multiplier)
+    # Cap the adjusted_multiplier at the max_audio_visual_span
+    adjusted_multiplier = min(adjusted_multiplier, max_audio_visual_span)
 
     # Log the adjusted (and possibly capped) buffer size
-    if adjusted_multiplier != mel_buffer_multiplier:
+    if adjusted_multiplier != audio_visual_span:
         logging.info(f"Adjusted buffer to {adjusted_multiplier}")
     else:
         logging.info("Buffer size remains unchanged.")
@@ -237,14 +237,16 @@ def process_audio(config: dict[str, Any], args: Any) -> bool:
     # affecting the visual pacing of the spectrogram scroll in the final video.
     seconds_in_view: Final[int] = config["audio_visualization"]["seconds_in_view"]
 
-    # get the playhead position from config.
-    # 0 is hard left of the frame, 0.5 is centre
-    playhead: Final[float] = config.get("audio_visualization", {}).get(
-        "playhead_position", 0.0
-    )
+    # REMOVE
+    # # get the playhead position from config.
+    # # 0 is hard left of the frame, 0.5 is centre
+    # playhead: Final[float] = config.get("audio_visualization", {}).get(
+    #     "playhead_position", 0.0
+    # )
 
-    lead_in_silence_duration = seconds_in_view * playhead
-    tail_silence_duration = seconds_in_view * (1 - playhead)
+    # REMOVE
+    # lead_in_silence_duration = seconds_in_view * playhead
+    # tail_silence_duration = seconds_in_view * (1 - playhead)
 
     # Maximum allowable image width
     max_image_width_px = 65536  # Safe limit, matplot or png
@@ -263,13 +265,17 @@ def process_audio(config: dict[str, Any], args: Any) -> bool:
         logging.error(error_message)
         raise ValueError(error_message)
 
-    #   a multiplyer  that determines how much audio to process each cycle
-    #   smaller numbers will take longer, higher numbers will use a lot of memory
-    #   1 minute displayed in a frame x 20 = 20 minutes of audio processed
-    mel_buffer_multiplier = config["audio_visualization"]["mel_buffer_multiplier"]
+    # audio_visual_span defines the quantity of audio data processed into visual form for each segment of the Mel spectrogram.
+    # It influences the computational requirements and the width of the generated spectrogram images,
+    # which are then broken down into individual video frames for the final MP4 video.
+    # This variable bridges the audio processing and visual representation domains,
+    # highlighting the project's interdisciplinary nature.
+    # audio_visual_span = 3  # Example: Incorporate the audio equivalent of 3 seconds in each Mel spectrogram segment.
+
+    audio_visual_span: Final[int] = config["audio_visualization"]["audio_visual_span"]
 
     audio_buffer, extended_audio_buffer = calculate_buffer(
-        source_audio_duration, seconds_in_view, mel_buffer_multiplier, args.buffering
+        source_audio_duration, seconds_in_view, audio_visual_span, args.buffering
     )
 
     logging.info(f"Full frame duration : {seconds_in_view} secs")
@@ -289,7 +295,7 @@ def process_audio(config: dict[str, Any], args: Any) -> bool:
     logging.info(f"n_fft : {n_ftt}")
     logging.info(f"hop length : {hop_length}")
 
-    ffmpeg_cmd_cpu = [
+    ffmpeg_cmd_cpu: List[str] = [
         "ffmpeg",
         "-y",
         "-f",
@@ -316,7 +322,7 @@ def process_audio(config: dict[str, Any], args: Any) -> bool:
     ]
 
     ### Start the ffmpeg process
-    ffmpeg_cmd_gpu = [
+    ffmpeg_cmd_gpu: List[str] = [
         "ffmpeg",
         "-y",
         "-f",
@@ -347,7 +353,7 @@ def process_audio(config: dict[str, Any], args: Any) -> bool:
         ffmpeg_cmd = ffmpeg_cmd_cpu
 
     with open("ffmpeg_log.txt", "wb") as log_file:
-        ffmpeg_process = subprocess.Popen(
+        ffmpeg_process: subprocess.Popen = subprocess.Popen(
             ffmpeg_cmd, stdin=subprocess.PIPE, stdout=log_file, stderr=subprocess.STDOUT
         )
 
@@ -364,12 +370,11 @@ def process_audio(config: dict[str, Any], args: Any) -> bool:
 
         if is_last_chunk:
             # Calculate the duration of tail silence based on the playhead position
-            tail_silence_duration = seconds_in_view * (1 - playhead)
+            # REMOVE
+            # tail_silence_duration = seconds_in_view * (1 - playhead)
 
             # Adjust remaining_duration to include the actual audio left plus the tail silence
-            remaining_duration = (
-                source_audio_duration - current_position_secs + tail_silence_duration
-            )
+            remaining_duration = source_audio_duration - current_position_secs
 
             # Since this is the last chunk, the audio buffer needs to accommodate the remaining audio plus the tail silence
             audio_buffer = remaining_duration
@@ -379,20 +384,20 @@ def process_audio(config: dict[str, Any], args: Any) -> bool:
 
             # Convert the duration of silence into a corresponding image width
             # This assumes a linear relationship between time and image width as used in the rest of the video
-            silence_image_width = int(
-                frame_width * (tail_silence_duration / seconds_in_view)
-            )
+            # silence_image_width = int(
+            #     frame_width * (tail_silence_duration / seconds_in_view)
+            # )
 
             # Now adjust the calculation of wide_mel_image_width for the last chunk to include the visual silence
             proportion_of_full_chunk = remaining_duration / (
-                seconds_in_view * mel_buffer_multiplier
+                seconds_in_view * audio_visual_span
             )
             wide_mel_image_width = int(
-                (frame_width * mel_buffer_multiplier) * proportion_of_full_chunk
+                (frame_width * audio_visual_span) * proportion_of_full_chunk
             )
 
             # Append the visual silence to the wide Mel image width
-            wide_mel_image_width += silence_image_width
+            # wide_mel_image_width += silence_image_width
 
         # Load audio segment
         logging.info("Loading audio segment")
@@ -405,22 +410,23 @@ def process_audio(config: dict[str, Any], args: Any) -> bool:
         )
         logging.info(f"Processing time: {(time.time() - start_time):.2f} seconds")
 
+        # REMOVE
         # prepend an offset to position the readhead to centre
         # first chunk only
         # playhead positioning
-        if current_position_secs == 0:
-            silence = np.zeros(int(sr * lead_in_silence_duration))
-            logging.warning(
-                f"playhead leadin duration : {len(silence)} samples, {len(silence)/sr} secs"
-            )
-            y = np.concatenate((silence, y))
+        # if current_position_secs == 0:
+        #     silence = np.zeros(int(sr * lead_in_silence_duration))
+        #     logging.warning(
+        #         f"playhead leadin duration : {len(silence)} samples, {len(silence)/sr} secs"
+        #     )
+        #     y = np.concatenate((silence, y))
 
-        if is_last_chunk:
-            silence = np.zeros(int(sr * tail_silence_duration))
-            logging.warning(
-                f"playhead playout duration : {len(silence)} samples, {len(silence)/sr} secs"
-            )
-            y = np.concatenate((y, silence))
+        # if is_last_chunk:
+        #     silence = np.zeros(int(sr * tail_silence_duration))
+        #     logging.warning(
+        #         f"playhead playout duration : {len(silence)} samples, {len(silence)/sr} secs"
+        #     )
+        #     y = np.concatenate((y, silence))
 
         logging.info("Calculate mel data")
         start_time = time.time()
@@ -454,14 +460,14 @@ def process_audio(config: dict[str, Any], args: Any) -> bool:
         if is_last_chunk:
             # Calculate the proportion of the last chunk relative to a full audio_buffer duration
             proportion_of_full_chunk = remaining_duration / (
-                seconds_in_view * mel_buffer_multiplier
+                seconds_in_view * audio_visual_span
             )
             # Apply this proportion to the base wide mel image width calculation
             wide_mel_image_width = int(
-                (frame_width * mel_buffer_multiplier) * proportion_of_full_chunk
+                (frame_width * audio_visual_span) * proportion_of_full_chunk
             )
         else:
-            wide_mel_image_width = (frame_width * mel_buffer_multiplier) + frame_width
+            wide_mel_image_width = (frame_width * audio_visual_span) + frame_width
 
         # Plotting the spectrogram without any axes or labels
         plt.figure(figsize=(wide_mel_image_width / 100, frame_height / 100))
@@ -506,24 +512,26 @@ def process_audio(config: dict[str, Any], args: Any) -> bool:
             # Slice the wide mel image to extract the frame
             frame_image = wide_mel_image.crop((start_pos, 0, end_pos, frame_height))
 
-            playhead_overlay = create_playhead_overlay(
-                total_frames_rendered + 1,
-                frame_rate,
-                [frame_width, frame_height],
-                playhead,
-                (128, 128, 128, 64),
-                5,
-            )
+            # remove
+            # playhead_overlay = create_playhead_overlay(
+            #     total_frames_rendered + 1,
+            #     frame_rate,
+            #     [frame_width, frame_height],
+            #     playhead,
+            #     (128, 128, 128, 64),
+            #     5,
+            # )
 
-            combined_image = Image.alpha_composite(frame_image, playhead_overlay)
+            # combined_image = Image.alpha_composite(frame_image, playhead_overlay)
 
             # Convert the image to bytes
-            cropped_frame_rgb = combined_image.convert("RGB")
+            cropped_frame_rgb = frame_image.convert("RGB")
             cropped_frame_bytes = cropped_frame_rgb.tobytes()
 
             # Write the frame bytes to ffmpeg's stdin
-            ffmpeg_process.stdin.write(cropped_frame_bytes)
-            total_frames_rendered += 1
+            if ffmpeg_process.stdin is not None:
+                ffmpeg_process.stdin.write(cropped_frame_bytes)
+                total_frames_rendered += 1
 
             if current_position_secs == 0 and i == 0:
                 # Save the frame as an image file (adjust the filename as needed)
@@ -533,28 +541,28 @@ def process_audio(config: dict[str, Any], args: Any) -> bool:
         # increment chunk
 
         if current_position_secs == 0:  # first chunk
-            current_position_secs += audio_buffer - (
-                seconds_in_view * playhead
-            )  # account for offset silence
+            current_position_secs += audio_buffer
         else:
             current_position_secs += audio_buffer
         logging.critical(f"current_position = {current_position_secs}")
 
-        if args.buffering:
-            mel_buffer_multiplier = tune_buffer(
-                mel_buffer_multiplier, frame_width, max_image_width_px
-            )
+        ## REMOVE
+        # if args.buffering:
+        #     audio_visual_span = tune_buffer(
+        #         audio_visual_span, frame_width, max_image_width_px
+        #     )
 
         # reset audio buffer sizes
-        audio_buffer, extended_audio_buffer = calculate_buffer(
-            source_audio_duration,
-            seconds_in_view,
-            mel_buffer_multiplier,
-            args.buffering,
-        )
+        # audio_buffer, extended_audio_buffer = calculate_buffer(
+        #     source_audio_duration,
+        #     seconds_in_view,
+        #     audio_visual_span,
+        #     args.buffering,
+        # )
 
     # Close ffmpeg's stdin to signal end of input
-    ffmpeg_process.stdin.close()
+    if ffmpeg_process.stdin is not None:
+        ffmpeg_process.stdin.close()
 
     # Wait for ffmpeg to finish encoding
     ffmpeg_process.wait()

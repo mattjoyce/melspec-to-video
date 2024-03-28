@@ -1,6 +1,6 @@
 audio_visualization:
   cmap: bone
-  mel_buffer_multiplier: 100
+  audio_visual_span: 100
   playhead_position: 0.50
   second_in_view: 10
 mel_spectrogram:
