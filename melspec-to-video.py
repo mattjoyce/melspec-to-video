@@ -1,40 +1,35 @@
-import subprocess
-import time
-import math
-
-import logging
 import argparse
-
+import logging
+import math
+import subprocess
+import threading
+import time
+from typing import Final, Any
 
 import librosa
 import librosa.display
 import matplotlib.pyplot as plt
 import numpy as np
+import psutil
 import yaml
-from matplotlib.colors import LinearSegmentedColormap
 from PIL import Image, ImageDraw, ImageFont
 
-import threading
-import psutil
+# Mel Scale Spectrogram Video from Audio
 
-from typing import Final
-"""
-Mel Scale Spectrogram Video from Audio
+# This script transforms audio files into visual spectrogram representations and encodes them into a video file.
+# It leverages librosa for audio processing and Mel spectrogram generation, matplotlib for plotting, and FFmpeg for video encoding.
 
-This script transforms audio files into visual spectrogram representations and encodes them into a video file. 
-It leverages librosa for audio processing and Mel spectrogram generation, matplotlib for plotting, and FFmpeg for video encoding.
+# Configuration is managed via a YAML file, allowing customization of video dimensions, frame rate, audio processing parameters, and optional color palettes for the spectrogram.
+# The script supports dynamic adjustment of spectrogram image widths based on audio chunk sizes, ensuring smooth transitions and consistent visual output across the video.
 
-Configuration is managed via a YAML file, allowing customization of video dimensions, frame rate, audio processing parameters, and optional color palettes for the spectrogram. 
-The script supports dynamic adjustment of spectrogram image widths based on audio chunk sizes, ensuring smooth transitions and consistent visual output across the video.
+# Features include:
+# - Loading and processing of audio data in configurable chunks.
+# - Generation of Mel spectrograms from audio data, with optional normalization against a global max power level.
+# - Customizable spectrogram color mapping.
+# - Efficient video encoding using FFmpeg, with parameters for quality and compatibility.
 
-Features include:
-- Loading and processing of audio data in configurable chunks.
-- Generation of Mel spectrograms from audio data, with optional normalization against a global max power level.
-- Customizable spectrogram color mapping.
-- Efficient video encoding using FFmpeg, with parameters for quality and compatibility.
+# Designed for flexibility and efficiency, this tool is suited for researchers, musicians, bioaucoustic field recordists, and audiovisual artists looking to create detailed and customized visualizations of audio data.
 
-Designed for flexibility and efficiency, this tool is suited for researchers, musicians, bioaucoustic field recordists, and audiovisual artists looking to create detailed and customized visualizations of audio data.
-"""
 
 # Setup basic logging
 logging.basicConfig(
@@ -122,17 +117,20 @@ def load_config(config_path):
     return config
 
 
-def calculate_buffer(source_audio_duration, time_per_frame, mel_buffer_multiplier, buffering):
+def calculate_buffer(
+    source_audio_duration, seconds_in_view, mel_buffer_multiplier, buffering
+):
+    """Function Calculate buffer size"""
     # if not buffering, read the whole thing, set the buffer to be big enough
     if buffering:
         # the ammount of audio data needed to produce the wide mel buffer
-        audio_buffer = time_per_frame * mel_buffer_multiplier
+        audio_buffer = seconds_in_view * mel_buffer_multiplier
         # we add enough to service the sliding window tail
-        extended_audio_buffer = audio_buffer + time_per_frame
+        extended_audio_buffer = audio_buffer + seconds_in_view
     else:
         # make the buffer as big as the audio
         audio_buffer = source_audio_duration
-        extended_audio_buffer = source_audio_duration + time_per_frame
+        extended_audio_buffer = source_audio_duration + seconds_in_view
     return audio_buffer, extended_audio_buffer
 
 
@@ -164,13 +162,15 @@ def tune_buffer(mel_buffer_multiplier, frame_width, width_limit):
     return adjusted_multiplier
 
 
-def is_max_mel_image_width_safe(source_audio_duration, time_per_frame, frame_width, limit):
+def is_max_mel_image_width_safe(
+    source_audio_duration, seconds_in_view, frame_width, limit
+):
     # we need to know the most audio we might handle
-    max_audio_duration = source_audio_duration + time_per_frame
+    max_audio_duration = source_audio_duration + seconds_in_view
 
     # Determine the maximum number of frames needed
     max_num_frames = (
-        math.ceil(max_audio_duration / time_per_frame) + 1
+        math.ceil(max_audio_duration / seconds_in_view) + 1
     )  # Round up to ensure all audio is covered, include an extra frame for sliding window
 
     # Calculate the maximum possible wide Mel image width
@@ -182,18 +182,18 @@ def is_max_mel_image_width_safe(source_audio_duration, time_per_frame, frame_wid
     return is_safe, max_wide_mel_image_width  # is safe?
 
 
-def process_audio(config, args):
-    #these are used to track memory usage and provide warnings
+def process_audio(config: dict[str, Any], args: Any) -> bool:
+    """Function Main Loop"""
+    # these are used to track memory usage and provide warnings
     global max_mem, memory_usage
 
     # extract the config and argumates to variables.
-    audio_fsp = args.input
-    video_fsp = args.output
+    audio_fsp: Final[str] = args.input
+    video_fsp: Final[str] = args.output
     logging.info(f"Audio file in : {audio_fsp}")
     logging.info(f"Video file out: {video_fsp}")
 
-    sr: Final = args.sr
-    logging.info(f"Audio Sample Rate : {sr}")
+    target_sr: Final[int] = args.sr
 
     audio_start = args.start
     audio_duration = args.duration
@@ -209,16 +209,15 @@ def process_audio(config, args):
         maxpower = config.get("mel_spectrogram", {}).get("maxpower", None)
 
     ##loads the file
-    source_audio_duration : Final = librosa.get_duration(path=audio_fsp)
-    logging.info(f"Total duration (secs): {source_audio_duration}")
-
-    logging.info(f"Resample rate : {sr} hz")
+    source_audio_duration: Final[float] = librosa.get_duration(path=audio_fsp)
+    logging.info(f"Input audio duration (secs): {source_audio_duration}")
+    logging.info(f"Resample rate : {target_sr} hz")
     logging.info(f"Upper Reference Power : {maxpower}")
 
     # get the output video paramters from config
-    frame_width = config.get("video", {}).get("width", 800)
-    frame_height = config.get("video", {}).get("height", 200)
-    frame_rate = config.get("video", {}).get("frame_rate", 30)
+    frame_width: Final[int] = config.get("video", {}).get("width", 800)
+    frame_height: Final[int] = config.get("video", {}).get("height", 200)
+    frame_rate: Final[int] = config.get("video", {}).get("frame_rate", 30)
     logging.info(
         f"Output Video : {frame_width}px x {frame_height}px @ {frame_rate}fps "
     )
@@ -233,23 +232,25 @@ def process_audio(config, args):
 
     logging.info(f"Spectrogram Pallette : {colormap} ")
 
-    # config for the spectrogram
-    #   time_per_frame, is the duration of aution represented in 1 x frame_width
-    time_per_frame = config["audio_visualization"]["time_per_frame"]
-
+    # duration_in_view: The amount of audio duration (in seconds) represented in a single frame of the video.
+    # This determines how much of the audio waveform is 'in view' in the spectrogram for each frame,
+    # affecting the visual pacing of the spectrogram scroll in the final video.
+    seconds_in_view: Final[int] = config["audio_visualization"]["seconds_in_view"]
 
     # get the playhead position from config.
     # 0 is hard left of the frame, 0.5 is centre
-    playhead = config.get("audio_visualization", {}).get("playhead_position", 0.0)
-    lead_in_silence_duration = time_per_frame * playhead
-    tail_silence_duration = time_per_frame * (1 - playhead)
+    playhead: Final[float] = config.get("audio_visualization", {}).get(
+        "playhead_position", 0.0
+    )
 
+    lead_in_silence_duration = seconds_in_view * playhead
+    tail_silence_duration = seconds_in_view * (1 - playhead)
 
     # Maximum allowable image width
     max_image_width_px = 65536  # Safe limit, matplot or png
 
     is_safe_size, calculated_size = is_max_mel_image_width_safe(
-        source_audio_duration, time_per_frame, frame_width, max_image_width_px
+        source_audio_duration, seconds_in_view, frame_width, max_image_width_px
     )
 
     # Check if the maximum possible width exceeds the maximum allowable width
@@ -268,10 +269,10 @@ def process_audio(config, args):
     mel_buffer_multiplier = config["audio_visualization"]["mel_buffer_multiplier"]
 
     audio_buffer, extended_audio_buffer = calculate_buffer(
-        source_audio_duration, time_per_frame, mel_buffer_multiplier, args.buffering
+        source_audio_duration, seconds_in_view, mel_buffer_multiplier, args.buffering
     )
 
-    logging.info(f"Full frame duration : {time_per_frame} secs")
+    logging.info(f"Full frame duration : {seconds_in_view} secs")
     logging.info(f"Audio Buffer     : {audio_buffer} secs")
     logging.info(f"Audio Buffer ext : {extended_audio_buffer} secs")
 
@@ -363,10 +364,12 @@ def process_audio(config, args):
 
         if is_last_chunk:
             # Calculate the duration of tail silence based on the playhead position
-            tail_silence_duration = time_per_frame * (1 - playhead)
+            tail_silence_duration = seconds_in_view * (1 - playhead)
 
             # Adjust remaining_duration to include the actual audio left plus the tail silence
-            remaining_duration = source_audio_duration - current_position_secs + tail_silence_duration
+            remaining_duration = (
+                source_audio_duration - current_position_secs + tail_silence_duration
+            )
 
             # Since this is the last chunk, the audio buffer needs to accommodate the remaining audio plus the tail silence
             audio_buffer = remaining_duration
@@ -376,22 +379,27 @@ def process_audio(config, args):
 
             # Convert the duration of silence into a corresponding image width
             # This assumes a linear relationship between time and image width as used in the rest of the video
-            silence_image_width = int(frame_width * (tail_silence_duration / time_per_frame))
+            silence_image_width = int(
+                frame_width * (tail_silence_duration / seconds_in_view)
+            )
 
             # Now adjust the calculation of wide_mel_image_width for the last chunk to include the visual silence
-            proportion_of_full_chunk = remaining_duration / (time_per_frame * mel_buffer_multiplier)
-            wide_mel_image_width = int((frame_width * mel_buffer_multiplier) * proportion_of_full_chunk)
+            proportion_of_full_chunk = remaining_duration / (
+                seconds_in_view * mel_buffer_multiplier
+            )
+            wide_mel_image_width = int(
+                (frame_width * mel_buffer_multiplier) * proportion_of_full_chunk
+            )
 
             # Append the visual silence to the wide Mel image width
             wide_mel_image_width += silence_image_width
-
 
         # Load audio segment
         logging.info("Loading audio segment")
         start_time = time.time()
         y, sr = librosa.load(
             audio_fsp,
-            sr=sr,
+            sr=target_sr,
             offset=current_position_secs,
             duration=extended_audio_buffer,
         )
@@ -407,14 +415,12 @@ def process_audio(config, args):
             )
             y = np.concatenate((silence, y))
 
-
         if is_last_chunk:
             silence = np.zeros(int(sr * tail_silence_duration))
             logging.warning(
                 f"playhead playout duration : {len(silence)} samples, {len(silence)/sr} secs"
             )
-            y = np.concatenate((y,silence))
-
+            y = np.concatenate((y, silence))
 
         logging.info("Calculate mel data")
         start_time = time.time()
@@ -448,7 +454,7 @@ def process_audio(config, args):
         if is_last_chunk:
             # Calculate the proportion of the last chunk relative to a full audio_buffer duration
             proportion_of_full_chunk = remaining_duration / (
-                time_per_frame * mel_buffer_multiplier
+                seconds_in_view * mel_buffer_multiplier
             )
             # Apply this proportion to the base wide mel image width calculation
             wide_mel_image_width = int(
@@ -528,7 +534,7 @@ def process_audio(config, args):
 
         if current_position_secs == 0:  # first chunk
             current_position_secs += audio_buffer - (
-                time_per_frame * playhead
+                seconds_in_view * playhead
             )  # account for offset silence
         else:
             current_position_secs += audio_buffer
@@ -541,7 +547,10 @@ def process_audio(config, args):
 
         # reset audio buffer sizes
         audio_buffer, extended_audio_buffer = calculate_buffer(
-            source_audio_duration, time_per_frame, mel_buffer_multiplier, args.buffering
+            source_audio_duration,
+            seconds_in_view,
+            mel_buffer_multiplier,
+            args.buffering,
         )
 
     # Close ffmpeg's stdin to signal end of input
@@ -550,6 +559,7 @@ def process_audio(config, args):
     # Wait for ffmpeg to finish encoding
     ffmpeg_process.wait()
     logging.info(f"Total frames rendered : {total_frames_rendered}")
+    return True
 
 
 def main():

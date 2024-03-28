@@ -1,9 +1,8 @@
-audio_files:
 audio_visualization:
   cmap: bone
   mel_buffer_multiplier: 1
   playhead_position: 0.50
-  time_per_frame: 60
+  seconds_in_view: 60
 mel_spectrogram:
   db_high: 0
   db_low: -70
