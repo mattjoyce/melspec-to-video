@@ -1,16 +1,31 @@
+audio_files:
+  ZOOM0018-22k-mono.wav:
+    max_power: 400.6187686587872
+    sample_count: 267635227
+    sample_rate: 22050
+  test-short.wav:
+    max_power: 44.93444466120256
+    sample_count: 2647817
+    sample_rate: 44100
+  test.wav:
+    max_power: 456.89621012506683
+    sample_count: 39690000
+    sample_rate: 44100
 audio_visualization:
-  cmap: bone
-  audio_visual_span: 3
-  playhead_position: 0.25
-  seconds_in_view: 10
+  audio_visual_span: 1
+  cmap: magma
+  max_spectrogram_width: 30000
+  playhead_position: 0.5
+  seconds_in_view: 60
 mel_spectrogram:
   db_high: 0
   db_low: -70
-  f_high: 22000
+  f_high: 22050
   f_low: 50
-  hop_length: 256
+  hop_length: 512
   n_fft: 2048
+  n_mels: 200
 video:
   frame_rate: 30
-  height: 200
+  height: 400
   width: 400

@@ -16,6 +16,8 @@ from PIL import Image, ImageDraw, ImageFont
 import soundfile as sf
 from tqdm import tqdm
 import sys
+import os
+import glob
 
 # Mel Scale Spectrogram Video from Audio
 
@@ -660,6 +662,115 @@ def update_config(config, config_path, audio_path, profile):
     return config
 
 
+def generate_spectrograms(config: dict[str, Any], args: argparse.Namespace) -> bool:
+    """Function processes the audio, creates a series of wide Mel spectrogram PNG files."""
+    audio_fsp = args.input
+    video = config.get("video", {})
+    audiovis = config.get("audio_visualization", {})
+    profile = config.get("audio_files", {}).get(args.input, {})
+    melspec = config.get("mel_spectrogram", {})
+
+    max_spectrogram_width = audiovis.get("max_spectrogram_width", 1000)
+    logging.info(f"max_spectrogram_width: {max_spectrogram_width}")
+
+    sample_rate = profile["sample_rate"]
+
+    samples_per_pixel = (audiovis["seconds_in_view"] * sample_rate) / video["width"]
+    y_chunk_samples = int(samples_per_pixel * max_spectrogram_width)
+    logging.info(f"y_chunk_samples: {y_chunk_samples}")
+
+    full_chunk_duration_secs = y_chunk_samples / sample_rate
+
+    total_duration_secs = librosa.get_duration(path=audio_fsp, sr=sample_rate)
+
+    # check and create the folder
+    file_name_no_extension = os.path.splitext(audio_fsp)[0]
+    if not os.path.exists(file_name_no_extension):
+        os.mkdir(file_name_no_extension)
+
+    ##delete files in folder
+    # Delete PNG files in the folder
+    # Create a pattern that matches all PNG files in the directory
+    png_files_pattern = os.path.join(
+        file_name_no_extension, f"{file_name_no_extension}*.png"
+    )
+    # Use glob to find all files in the directory that match the pattern
+    for png_file in glob.glob(png_files_pattern):
+        os.remove(png_file)  # Delete each found PNG file
+
+    current_position_secs = 0
+    count = 0
+    while current_position_secs < total_duration_secs:
+        print(f"{current_position_secs} / {total_duration_secs}")
+
+        duration_secs = min(
+            y_chunk_samples / sample_rate,
+            total_duration_secs - current_position_secs,
+        )
+
+        y, sr = librosa.load(
+            audio_fsp,
+            sr=sample_rate,
+            offset=current_position_secs,
+            duration=duration_secs,
+        )
+
+        S = librosa.feature.melspectrogram(
+            y=y,
+            sr=sr,
+            n_fft=melspec.get("n_fft", 2048),
+            hop_length=melspec.get("hop_length", 512),
+            n_mels=melspec.get("n_mels", 100),
+            fmin=melspec.get("f_low", 0),
+            fmax=melspec.get("f_high", sr // 2),
+        )
+
+        S_dB = librosa.power_to_db(
+            S,
+            ref=profile.get(
+                "max_power", np.max(S)
+            ),  # Adjusted to use max_power if available or max of S
+            amin=10
+            ** (
+                melspec.get("db_low", -80) / 10.0
+            ),  # Providing a default value if not specified
+            top_db=melspec.get("db_high", 80) - melspec.get("db_low", -80),
+        )
+
+        if (
+            duration_secs < full_chunk_duration_secs
+        ):  # Adjust for potentially shorter last chunk
+            image_width = int(
+                max_spectrogram_width * (duration_secs / full_chunk_duration_secs)
+            )
+        else:
+            image_width = max_spectrogram_width
+
+        plt.figure(figsize=(image_width / 100, video.get("height", 100) / 100))
+        librosa.display.specshow(
+            S_dB,
+            sr=sr,
+            cmap=audiovis.get("cmap", "magma"),
+            hop_length=melspec.get("hop_length", 512),
+            fmin=melspec.get("f_low", 0),
+            fmax=melspec.get("f_high", sr // 2),
+        )
+        plt.axis("off")
+        plt.tight_layout(pad=0)
+        image_filename = f"{file_name_no_extension}-{count:04d}.png"
+        plt.savefig(
+            os.path.join(file_name_no_extension, image_filename),
+            bbox_inches="tight",
+            pad_inches=0,
+        )
+        plt.close()
+
+        current_position_secs += duration_secs
+        count += 1
+
+    return True
+
+
 def main():
 
     # Start the memory monitoring thread
@@ -719,6 +830,8 @@ def main():
 
     config = load_config(args.config)
 
+    ### PASS 1
+    ## if these are missing recalculate and save to config file
     maxpower = config.get("audio_files", {}).get(args.input, {}).get("max_power", None)
     sample_rate = (
         config.get("audio_files", {}).get(args.input, {}).get("sample_rate", None)
@@ -731,7 +844,11 @@ def main():
         print(profile)
         update_config(config, args.config, args.input, profile)
 
-    process_audio(config, args)
+    ### PASS 2
+    # Generate the spectrograms
+    generate_spectrograms(config, args)
+
+    # process_audio(config, args)
 
 
 if __name__ == "__main__":
