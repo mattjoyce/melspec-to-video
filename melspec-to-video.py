@@ -1,23 +1,25 @@
 import argparse
+import glob
 import logging
 import math
+import os
 import subprocess
+import sys
 import threading
 import time
-from typing import Final, Any, List
+from typing import Any, Final, List
 
 import librosa
 import librosa.display
 import matplotlib.pyplot as plt
 import numpy as np
 import psutil
+import soundfile as sf
 import yaml
 from PIL import Image, ImageDraw, ImageFont
-import soundfile as sf
 from tqdm import tqdm
-import sys
-import os
-import glob
+from datetime import datetime
+import json
 
 # Mel Scale Spectrogram Video from Audio
 
@@ -662,8 +664,18 @@ def update_config(config, config_path, audio_path, profile):
     return config
 
 
-def generate_spectrograms(config: dict[str, Any], args: argparse.Namespace) -> bool:
+def generate_spectrograms(
+    config: dict[str, Any],
+    args: argparse.Namespace,
+    base_name: str,
+    project_folder: str,
+    project_data: dict[str, Any],
+) -> bool:
     """Function processes the audio, creates a series of wide Mel spectrogram PNG files."""
+
+    images_metadata = []
+
+    max_power = project_data["audio_metadata"]["max_power"]
     audio_fsp = args.input
     video = config.get("video", {})
     audiovis = config.get("audio_visualization", {})
@@ -683,25 +695,12 @@ def generate_spectrograms(config: dict[str, Any], args: argparse.Namespace) -> b
 
     total_duration_secs = librosa.get_duration(path=audio_fsp, sr=sample_rate)
 
-    # check and create the folder
-    file_name_no_extension = os.path.splitext(audio_fsp)[0]
-    if not os.path.exists(file_name_no_extension):
-        os.mkdir(file_name_no_extension)
-
-    ##delete files in folder
-    # Delete PNG files in the folder
-    # Create a pattern that matches all PNG files in the directory
-    png_files_pattern = os.path.join(
-        file_name_no_extension, f"{file_name_no_extension}*.png"
-    )
-    # Use glob to find all files in the directory that match the pattern
-    for png_file in glob.glob(png_files_pattern):
-        os.remove(png_file)  # Delete each found PNG file
-
     current_position_secs = 0
+
     count = 0
+    progress_bar = tqdm(total=total_duration_secs)
     while current_position_secs < total_duration_secs:
-        print(f"{current_position_secs} / {total_duration_secs}")
+        # print(f"{current_position_secs} / {total_duration_secs}")
 
         duration_secs = min(
             y_chunk_samples / sample_rate,
@@ -727,9 +726,7 @@ def generate_spectrograms(config: dict[str, Any], args: argparse.Namespace) -> b
 
         S_dB = librosa.power_to_db(
             S,
-            ref=profile.get(
-                "max_power", np.max(S)
-            ),  # Adjusted to use max_power if available or max of S
+            ref=max_power,  # Adjusted to use max_power if available or max of S
             amin=10
             ** (
                 melspec.get("db_low", -80) / 10.0
@@ -757,18 +754,107 @@ def generate_spectrograms(config: dict[str, Any], args: argparse.Namespace) -> b
         )
         plt.axis("off")
         plt.tight_layout(pad=0)
-        image_filename = f"{file_name_no_extension}-{count:04d}.png"
+        image_filename = f"{base_name}-{count:04d}.png"
         plt.savefig(
-            os.path.join(file_name_no_extension, image_filename),
+            os.path.join(project_folder, image_filename),
             bbox_inches="tight",
             pad_inches=0,
         )
         plt.close()
 
+        # Save spectrogram and update project data with image metadata
+        # For each generated image, create its metadata entry
+        image_metadata = {
+            "filename": image_filename,
+            "start_time": current_position_secs,
+            "end_time": current_position_secs + duration_secs,
+            # Additional metadata can be included here
+        }
+        # Append this metadata to the project data
+        # Consider creating a function similar to update_project_data to handle this update
+        images_metadata.append(image_metadata)
+
         current_position_secs += duration_secs
+        progress_bar.update(duration_secs)
         count += 1
+    progress_bar.close()
+    project_data = update_project_data(
+        project_folder, "images_metadata", images_metadata
+    )
 
     return True
+
+
+def generate_folder_name(base_name):
+    timestamp = datetime.now().strftime("%y%m%d%H%M%S")
+    folder_name = f"{base_name}-{timestamp}"
+    return folder_name
+
+
+def create_project_folder(base_path, folder_name):
+    project_path = os.path.join(base_path, folder_name)
+    if not os.path.exists(project_path):
+        os.makedirs(project_path)
+    return project_path
+
+
+def initialize_project_data(project_folder, fullpath):
+    directory_path = os.path.dirname(fullpath)
+    filename = os.path.basename(fullpath)
+    json_filename = os.path.join(project_folder, "project_data.json")
+
+    initial_data = {
+        "audio_metadata": {
+            "source_audio_path": directory_path,
+            "source_audio_filename": filename,
+            "max_power": None,
+            "sample_rate": None,
+            "sample_count": None,
+        },
+        "images_metadata": [],
+    }
+    # Write the project data to the JSON file
+    with open(json_filename, "w") as json_file:
+        json.dump(initial_data, json_file, indent=4)
+
+    return initial_data
+
+
+def load_project_data(project_folder):
+    json_filename = os.path.join(project_folder, "project_data.json")
+
+    if os.path.exists(json_filename):
+        with open(json_filename, "r") as json_file:
+            return json.load(json_file)
+    else:
+        print("Project data file not found.")
+        return None
+
+
+def update_project_data(project_folder, key, new_data):
+    json_filename = os.path.join(project_folder, "project_data.json")
+    print(f"json_filename: {json_filename}")
+    # Ensure the project data file exists
+    if not os.path.exists(json_filename):
+        print("Project data file not found. Initial data setup may be required.")
+        return
+
+    # Load the existing project data
+    with open(json_filename, "r") as json_file:
+        project_data = json.load(json_file)
+        print(f"current project data : {project_data}")
+    # Check if the key exists and if it points to a list, append the new data
+    if key in project_data and isinstance(project_data[key], list):
+        project_data[key].append(new_data)
+    else:
+        # For non-list data or new keys, update or set the value directly
+        project_data[key] = new_data
+
+    print(f"updated project data : {project_data}")
+    # Write the updated project data back to the file
+    with open(json_filename, "w") as json_file:
+        json.dump(project_data, json_file, indent=4)
+    return project_data
 
 
 def main():
@@ -830,23 +916,36 @@ def main():
 
     config = load_config(args.config)
 
+    full_path = os.path.abspath(args.input)
+    directory_path = os.path.dirname(full_path)
+    filename = os.path.basename(full_path)
+    basename, extension = os.path.splitext(filename)
+
+    print(f"The full path of the input file is: {full_path}")
+
+    project_folder = generate_folder_name(basename)
+    create_project_folder(directory_path, project_folder)
+    print(f"Project folder : {project_folder}")
+
+    project_data = initialize_project_data(project_folder, full_path)
+    print(f"project data init: {project_data}")
     ### PASS 1
     ## if these are missing recalculate and save to config file
-    maxpower = config.get("audio_files", {}).get(args.input, {}).get("max_power", None)
-    sample_rate = (
-        config.get("audio_files", {}).get(args.input, {}).get("sample_rate", None)
-    )
-    sample_count = (
-        config.get("audio_files", {}).get(args.input, {}).get("sample_count", None)
-    )
-    if not maxpower or not sample_rate or not sample_count:
-        profile = profile_audio(config, args)
-        print(profile)
-        update_config(config, args.config, args.input, profile)
+    maxpower = project_data["audio_metadata"].get("max_power")
+    sample_rate = project_data["audio_metadata"].get("sample_rate")
+    sample_count = project_data["audio_metadata"].get("sample_count")
 
+    if not maxpower or not sample_rate or not sample_count:
+        profile = profile_audio(
+            config, args
+        )  # Assuming profile_audio is adjusted to not require 'config'
+        print(f"Profile : {profile}")
+        project_data = update_project_data(project_folder, "audio_metadata", profile)
+
+    print(f"project data : {project_data}")
     ### PASS 2
     # Generate the spectrograms
-    generate_spectrograms(config, args)
+    generate_spectrograms(config, args, basename, project_folder, project_data)
 
     # process_audio(config, args)
 
