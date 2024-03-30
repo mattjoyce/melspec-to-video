@@ -13,8 +13,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import psutil
 import soundfile as sf
+from params import Params
 from PIL import Image, ImageDraw, ImageFont
 from tqdm import tqdm
+
 import utils
 
 # Mel Scale Spectrogram Video from Audio
@@ -578,27 +580,29 @@ def process_audio(config: dict[str, Any], args: Any) -> bool:
     return True
 
 
-def profile_audio(config: dict[str, Any], args: Any) -> dict[str, Any]:
+def profile_audio(params: Params) -> dict[str, Any]:
     """Function to derive the global max power reference from an audio file."""
     # Initialization and configuration extraction
-    audio_fsp = args.input
+    audio_fsp = params["input"]
     logging.info(f"Audio file in: {audio_fsp}")
-    target_sr = args.sr
+    target_sr = params["sr"]
     logging.info(f"Target Sample Rate: {target_sr}")
 
     # Configuration for Mel spectrogram
-    f_low = config.get("mel_spectrogram", {}).get("f_low", 0)
-    f_high = config.get("mel_spectrogram", {}).get("f_high", None)
-    hop_length = config.get("mel_spectrogram", {}).get("hop_length", 512)
-    n_fft = config.get("mel_spectrogram", {}).get("n_fft", 2048)
-    db_low = config.get("mel_spectrogram", {}).get("db_low", 60)
-    db_high = config.get("mel_spectrogram", {}).get("db_high", 0)
-    frame_height = config.get("video", {}).get("height", 200)
+    f_low = params.get("mel_spectrogram", {}).get("f_low", 0)
+    f_high = params.get("mel_spectrogram", {}).get("f_high", None)
+    hop_length = params.get("mel_spectrogram", {}).get("hop_length", 512)
+    n_fft = params.get("mel_spectrogram", {}).get("n_fft", 2048)
+    db_low = params.get("mel_spectrogram", {}).get("db_low", 60)
+    db_high = params.get("mel_spectrogram", {}).get("db_high", 0)
+    frame_height = params.get("video", {}).get("height", 200)
 
     # Load and resample the audio
     y, sr = load_and_resample_mono(audio_fsp, target_sr)
-    chunk_duration = 60
-    samples_per_chunk = int(sr * chunk_duration)
+    profiling_chunk_duration = params.get("audio_visualization", {}).get(
+        "profiling_chunk_duration", 60
+    )
+    samples_per_chunk = int(sr * profiling_chunk_duration)
     max_power_values = []
     print(f"db_low {db_low}")
     print(f"db_high {db_high}")
@@ -627,35 +631,33 @@ def profile_audio(config: dict[str, Any], args: Any) -> dict[str, Any]:
 
 
 def generate_spectrograms(
-    config: dict[str, Any],
-    args: argparse.Namespace,
-    base_name: str,
-    project_folder: str,
+    params: Params,
     project_data: dict[str, Any],
 ) -> bool:
     """Function processes the audio, creates a series of wide Mel spectrogram PNG files."""
 
-    images_metadata = []
+    images_metadata = []  # each image will have an entry with it's metadata
 
     max_power = project_data["audio_metadata"]["max_power"]
-    audio_fsp = args.input
-    video = config.get("video", {})
-    audiovis = config.get("audio_visualization", {})
-    profile = config.get("audio_files", {}).get(args.input, {})
-    melspec = config.get("mel_spectrogram", {})
+    audio_fsp = params["input"]
+    video = params.get("video", {})
+    audiovis = params.get("audio_visualization", {})
+    melspec = params.get("mel_spectrogram", {})
 
     max_spectrogram_width = audiovis.get("max_spectrogram_width", 1000)
     logging.info(f"max_spectrogram_width: {max_spectrogram_width}")
 
-    sample_rate = profile["sample_rate"]
+    target_sample_rate = params["sr"]
 
-    samples_per_pixel = (audiovis["seconds_in_view"] * sample_rate) / video["width"]
+    samples_per_pixel = (audiovis["seconds_in_view"] * target_sample_rate) / video[
+        "width"
+    ]
     y_chunk_samples = int(samples_per_pixel * max_spectrogram_width)
     logging.info(f"y_chunk_samples: {y_chunk_samples}")
 
-    full_chunk_duration_secs = y_chunk_samples / sample_rate
+    full_chunk_duration_secs = y_chunk_samples / target_sample_rate
 
-    total_duration_secs = librosa.get_duration(path=audio_fsp, sr=sample_rate)
+    total_duration_secs = librosa.get_duration(path=audio_fsp, sr=target_sample_rate)
 
     current_position_secs = 0
 
@@ -665,13 +667,13 @@ def generate_spectrograms(
         # print(f"{current_position_secs} / {total_duration_secs}")
 
         duration_secs = min(
-            y_chunk_samples / sample_rate,
+            y_chunk_samples / target_sample_rate,
             total_duration_secs - current_position_secs,
         )
 
         y, sr = librosa.load(
             audio_fsp,
-            sr=sample_rate,
+            sr=target_sample_rate,
             offset=current_position_secs,
             duration=duration_secs,
         )
@@ -716,9 +718,9 @@ def generate_spectrograms(
         )
         plt.axis("off")
         plt.tight_layout(pad=0)
-        image_filename = f"{base_name}-{count:04d}.png"
+        image_filename = f"{project_data['basename']}-{count:04d}.png"
         plt.savefig(
-            os.path.join(project_folder, image_filename),
+            os.path.join(project_data["project_folder"], image_filename),
             bbox_inches="tight",
             pad_inches=0,
         )
@@ -741,7 +743,7 @@ def generate_spectrograms(
         count += 1
     progress_bar.close()
     project_data = utils.update_project_data(
-        project_folder, "images_metadata", images_metadata
+        project_data["project_folder"], "images_metadata", images_metadata
     )
 
     return True
@@ -758,20 +760,24 @@ def main():
     parser = argparse.ArgumentParser(
         description="Generate a scrolling spectrogram video from an audio file."
     )
+
     parser.add_argument(
         "-c", "--config", required=True, help="Configuration file path."
     )
+
     parser.add_argument(
         "--start",
         help="Audio start time in seconds. Default: 0.",
         type=float,
         default=0,
     )
+
     parser.add_argument(
         "--duration",
         help="Audio clip duration in seconds. Processes till end if unspecified.",
         type=float,
     )
+
     parser.add_argument(
         "--sr",
         help="Audio sample rate. Overrides default (22050 Hz).",
@@ -782,12 +788,6 @@ def main():
     parser.add_argument(
         "--cpu",
         help="use CPU for processing if GPU is not available.",
-        action="store_true",
-        default=False,
-    )
-    parser.add_argument(
-        "--buffering",
-        help="Use buffering, to split the processing - for large files.",
         action="store_true",
         default=False,
     )
@@ -803,8 +803,11 @@ def main():
     )
 
     args = parser.parse_args()
-
     config = utils.load_config(args.config)
+
+    params = Params(args.config, args=args, file_type="yaml")
+    # print(conf["video"]["frame_rate"])
+    # print(conf["sr"])
 
     full_path = os.path.abspath(args.input)
     directory_path = os.path.dirname(full_path)
@@ -819,6 +822,13 @@ def main():
 
     project_data = utils.initialize_project_data(project_folder, full_path)
     print(f"project data init: {project_data}")
+
+    # store the project folder location in the project data
+    project_data = utils.update_project_data(
+        project_folder, "project_folder", project_folder
+    )
+    project_data = utils.update_project_data(project_folder, "basename", basename)
+
     ### PASS 1
     ## if these are missing recalculate and save to config file
     maxpower = project_data["audio_metadata"].get("max_power")
@@ -826,9 +836,7 @@ def main():
     sample_count = project_data["audio_metadata"].get("sample_count")
 
     if not maxpower or not sample_rate or not sample_count:
-        profile = profile_audio(
-            config, args
-        )  # Assuming profile_audio is adjusted to not require 'config'
+        profile = profile_audio(params)  #
         print(f"Profile : {profile}")
         project_data = utils.update_project_data(
             project_folder, "audio_metadata", profile
@@ -837,7 +845,7 @@ def main():
     print(f"project data : {project_data}")
     ### PASS 2
     # Generate the spectrograms
-    generate_spectrograms(config, args, basename, project_folder, project_data)
+    generate_spectrograms(params, project_data)
 
     # process_audio(config, args)
 
