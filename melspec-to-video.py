@@ -749,6 +749,170 @@ def generate_spectrograms(
     return True
 
 
+def render_project_to_mp4(params: Params, project: Params) -> bool:
+    """Function to produce MP$ video from a spectrogram
+
+    This approach uses a sliding window crop to sample the spectrogram images, and feed to ffmpeg to encode.
+
+    """
+
+    # localise some variable we will use frequently
+    video_fsp = os.path.join(project["project_path"], params["output"])
+    print(video_fsp)
+
+    # geometry of resulting mp4
+    frame_width: Final[int] = params["video"].get("width", 800)
+    frame_height: Final[int] = params["video"].get("height", 200)
+    frame_rate: Final[int] = params["video"].get("frame_rate", 30)
+
+    print(f"frame_height: {frame_height}")
+    print(f"frame_width: {frame_width}")
+
+    # duration_in_view: The amount of audio duration (in seconds) represented in a single frame of the video.
+    # This determines how much of the audio waveform is 'in view' in the spectrogram for each frame,
+    # affecting the visual pacing of the spectrogram scroll in the final video.
+    seconds_in_view: Final[int] = params["audio_visualization"]["seconds_in_view"]
+
+    ffmpeg_cmd_cpu: List[str] = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "rawvideo",
+        "-vcodec",
+        "rawvideo",
+        "-s",
+        f"{frame_width}x{frame_height}",  # Set frame size
+        "-pix_fmt",
+        "rgb24",  # Set pixel format
+        "-r",
+        f"{frame_rate}",
+        "-i",
+        "-",  # Input from stdin
+        "-c:v",
+        "libx264",  # Use libx264 for H.264 encoding
+        "-crf",
+        "17",  # Adjust CRF as needed for balance between quality and file size
+        "-preset",
+        "fast",  # Preset for encoding speed/quality trade-off (options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow)
+        "-vf",
+        "format=yuv420p",  # Pixel format for compatibility
+        f"{video_fsp}",
+    ]
+
+    ### Start the ffmpeg process
+    ffmpeg_cmd_gpu: List[str] = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "rawvideo",
+        "-vcodec",
+        "rawvideo",
+        "-s",
+        f"{frame_width}x{frame_height}",  # Set frame size
+        "-pix_fmt",
+        "rgb24",  # Set pixel format
+        "-r",
+        f"{frame_rate}",
+        "-i",
+        "-",  # Input from stdin
+        "-c:v",
+        "h264_nvenc",  # nvidia acceleration
+        "-crf",
+        "17",  # Constant rate factor for quality
+        "-preset",
+        "slow",  # Preset for encoding speed
+        "-vf",
+        "format=yuv420p",  # Pixel format for compatibility
+        f"{video_fsp}",
+    ]
+
+    ffmpeg_cmd = ffmpeg_cmd_gpu
+    if params["cpu"]:
+        ffmpeg_cmd = ffmpeg_cmd_cpu
+
+    print(ffmpeg_cmd)
+
+    with open("ffmpeg_log.txt", "wb") as log_file:
+        ffmpeg_process: subprocess.Popen = subprocess.Popen(
+            ffmpeg_cmd, stdin=subprocess.PIPE, stdout=log_file, stderr=subprocess.STDOUT
+        )
+
+    ## Image Loop
+    # Cycle through each image described by the project
+    total_images = len(project.get("images_metadata", []))
+    for i in range(total_images):
+        image_metadata = project["images_metadata"][i]
+        filename = image_metadata["filename"]
+        print(filename)
+        start_time = image_metadata["start_time"]
+        end_time = image_metadata["end_time"]
+
+        # duration of audio, the image represents
+        image_duration = end_time - start_time
+        print(f"image_duration : {image_duration}")
+
+        # the number of frame we need to render
+        num_frames = int(image_duration * frame_rate)
+        print(f"num_frames : {num_frames}")
+
+        # get the image
+        current_image = Image.open(os.path.join(project["project_path"], filename))
+        image_width, image_height = current_image.size
+
+        print(f"image width : {image_width}")
+
+        # number of pixels to slide for each frame
+        step_px = image_width / num_frames
+        print(f"step_px : {step_px}")
+
+        # extend the image to cover the join
+        if i < total_images - 1:
+            next_image_metadata = project["images_metadata"][i + 1]
+            next_filename = next_image_metadata["filename"]
+            next_image = Image.open(
+                os.path.join(project["project_path"], next_filename)
+            )
+            # Assume frame_width is the width of the frame to append from the next image
+            next_image_section = next_image.crop((0, 0, frame_width, frame_height))
+            current_image = concatenate_images(current_image, next_image_section)
+        else:
+            # Handle the last image separately if needed
+            pass
+
+        for i in range(num_frames):
+
+            crop_start_x = int(i * step_px)
+            crop_end_x = int(crop_start_x + frame_width)
+
+            cropped_frame = current_image.crop(
+                (crop_start_x, 0, crop_end_x, frame_height)
+            )
+
+            # Convert the image to bytes
+            cropped_frame_rgb = cropped_frame.convert("RGB")
+            cropped_frame_bytes = cropped_frame_rgb.tobytes()
+
+            # Write the frame bytes to ffmpeg's stdin
+            if ffmpeg_process.stdin is not None:
+                ffmpeg_process.stdin.write(cropped_frame_bytes)
+
+    # Close ffmpeg's stdin to signal end of input
+    # ffmpeg_process.wait()
+    if ffmpeg_process.stdin is not None:
+        ffmpeg_process.stdin.close()
+
+    return True
+
+
+def concatenate_images(image1, image2):
+    """Concatenate image2 to the right side of image1."""
+    new_width = image1.width + image2.width
+    new_img = Image.new("RGB", (new_width, image1.height))
+    new_img.paste(image1, (0, 0))
+    new_img.paste(image2, (image1.width, 0))
+    return new_img
+
+
 def main():
 
     # Start the memory monitoring thread
@@ -856,6 +1020,8 @@ def main():
     ### PASS 2
     # Generate the spectrograms
     generate_spectrograms(params, project)
+
+    render_project_to_mp4(params, project)
 
     # process_audio(config, args)
 

@@ -15,5 +15,5 @@ mel_spectrogram:
   n_mels: 200
 video:
   frame_rate: 30
-  height: 400
-  width: 400
+  height: 200
+  width: 800
