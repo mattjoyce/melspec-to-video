@@ -1,20 +1,30 @@
 import yaml
 import json
 import argparse
-from typing import Any, Dict
+import os
+from typing import Any, Dict, Optional
 
 
 class Params:
     def __init__(
-        self, file_path: str, args: argparse.Namespace = None, file_type: str = "yaml"
+        self,
+        file_path: Optional[str] = None,
+        args: Optional[argparse.Namespace] = None,
+        file_type: str = "yaml",
+        default_config: Optional[Dict[str, Any]] = None,
     ):
-        if file_type == "yaml":
-            self.config = self.load_yaml_config(file_path)
-        elif file_type == "json":
-            self.config = self.load_json_config(file_path)
-        else:
-            raise ValueError("Unsupported file type. Please use 'yaml' or 'json'.")
+        # Use the default configuration if provided, else initialize to an empty dict
+        self.config = default_config or {}
 
+        # Load the configuration from the file if the file path is provided and exists
+        if file_path and os.path.exists(file_path):
+            if file_type == "yaml":
+                self.config = self.load_yaml_config(file_path)
+            elif file_type == "json":
+                self.config = self.load_json_config(file_path)
+            else:
+                raise ValueError("Unsupported file type. Please use 'yaml' or 'json'.")
+        # Overlay command-line arguments if provided
         if args:
             self.overlay_args(args)
 

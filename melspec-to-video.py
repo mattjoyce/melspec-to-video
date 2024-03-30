@@ -632,13 +632,13 @@ def profile_audio(params: Params) -> dict[str, Any]:
 
 def generate_spectrograms(
     params: Params,
-    project_data: dict[str, Any],
+    project: Params,
 ) -> bool:
     """Function processes the audio, creates a series of wide Mel spectrogram PNG files."""
 
     images_metadata = []  # each image will have an entry with it's metadata
-
-    max_power = project_data["audio_metadata"]["max_power"]
+    audio_metadata = project["audio_metadata"]
+    max_power = audio_metadata.get("max_power")
     audio_fsp = params["input"]
     video = params.get("video", {})
     audiovis = params.get("audio_visualization", {})
@@ -718,9 +718,10 @@ def generate_spectrograms(
         )
         plt.axis("off")
         plt.tight_layout(pad=0)
-        image_filename = f"{project_data['basename']}-{count:04d}.png"
+        basename = os.path.splitext(audio_metadata["source_audio_filename"])[0]
+        image_filename = f"{basename}-{count:04d}.png"
         plt.savefig(
-            os.path.join(project_data["project_folder"], image_filename),
+            os.path.join(project["project_path"], image_filename),
             bbox_inches="tight",
             pad_inches=0,
         )
@@ -742,9 +743,8 @@ def generate_spectrograms(
         progress_bar.update(duration_secs)
         count += 1
     progress_bar.close()
-    project_data = utils.update_project_data(
-        project_data["project_folder"], "images_metadata", images_metadata
-    )
+    project["images_metadata"] = images_metadata
+    project.save_to_json(os.path.join(project["project_path"], project["project_file"]))
 
     return True
 
@@ -820,32 +820,42 @@ def main():
     utils.create_folder(directory_path, project_folder)
     print(f"Project folder : {project_folder}")
 
-    project_data = utils.initialize_project_data(project_folder, full_path)
-    print(f"project data init: {project_data}")
+    json_filename = os.path.join(project_folder, "project.json")
 
-    # store the project folder location in the project data
-    project_data = utils.update_project_data(
-        project_folder, "project_folder", project_folder
-    )
-    project_data = utils.update_project_data(project_folder, "basename", basename)
+    if os.path.exists(json_filename):
+        project = Params(file_path=json_filename, file_type="json")
+    else:
+        default_project_structure = {
+            "project_path": project_folder,
+            "project_file": "project.json",
+            "audio_metadata": {
+                "source_audio_path": "",
+                "source_audio_filename": "",
+                "max_power": None,
+                "sample_rate": None,
+                "sample_count": None,
+            },
+            "images_metadata": [],
+        }
+        project = Params(default_config=default_project_structure)
 
-    ### PASS 1
-    ## if these are missing recalculate and save to config file
-    maxpower = project_data["audio_metadata"].get("max_power")
-    sample_rate = project_data["audio_metadata"].get("sample_rate")
-    sample_count = project_data["audio_metadata"].get("sample_count")
+    project["audio_metadata"]["source_audio_path"] = directory_path
+    project["audio_metadata"]["source_audio_filename"] = args.input
 
-    if not maxpower or not sample_rate or not sample_count:
+    maxpower = project["audio_metadata"].get("max_power")
+    sample_rate = project["audio_metadata"].get("sample_rate")
+    sample_count = project["audio_metadata"].get("sample_count")
+    if any(value is None for value in [maxpower, sample_rate, sample_count]):
+        # This block executes if any of maxpower, sample_rate, or sample_count is None
         profile = profile_audio(params)  #
         print(f"Profile : {profile}")
-        project_data = utils.update_project_data(
-            project_folder, "audio_metadata", profile
-        )
+        project["audio_metadata"].update(profile)
 
-    print(f"project data : {project_data}")
+    project.save_to_json(json_filename)
+    print(f"project data : {project}")
     ### PASS 2
     # Generate the spectrograms
-    generate_spectrograms(params, project_data)
+    generate_spectrograms(params, project)
 
     # process_audio(config, args)
 
