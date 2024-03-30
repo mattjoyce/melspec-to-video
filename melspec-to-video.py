@@ -803,7 +803,7 @@ def main():
     )
 
     args = parser.parse_args()
-    config = utils.load_config(args.config)
+    # config = utils.load_config(args.config)
 
     params = Params(args.config, args=args, file_type="yaml")
     # print(conf["video"]["frame_rate"])

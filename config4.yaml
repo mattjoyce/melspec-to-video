@@ -1,22 +1,10 @@
-audio_files:
-  ZOOM0018-22k-mono.wav:
-    max_power: 400.6187686587872
-    sample_count: 267635227
-    sample_rate: 22050
-  test-short.wav:
-    max_power: 44.93444466120256
-    sample_count: 2647817
-    sample_rate: 44100
-  test.wav:
-    max_power: 456.89621012506683
-    sample_count: 39690000
-    sample_rate: 44100
 audio_visualization:
   audio_visual_span: 1
   cmap: magma
-  max_spectrogram_width: 30000
+  max_spectrogram_width: 1000
   playhead_position: 0.5
   seconds_in_view: 60
+  profiling_chunk_duration: 60 
 mel_spectrogram:
   db_high: 0
   db_low: -70
