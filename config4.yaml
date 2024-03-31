@@ -1,7 +1,7 @@
 audio_visualization:
   audio_visual_span: 1
   cmap: magma
-  max_spectrogram_width: 1000
+  max_spectrogram_width: 3000
   playhead_position: 0.5
   seconds_in_view: 60
   profiling_chunk_duration: 60 

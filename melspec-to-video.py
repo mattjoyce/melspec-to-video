@@ -589,13 +589,16 @@ def profile_audio(params: Params) -> dict[str, Any]:
     logging.info(f"Target Sample Rate: {target_sr}")
 
     # Configuration for Mel spectrogram
-    f_low = params.get("mel_spectrogram", {}).get("f_low", 0)
-    f_high = params.get("mel_spectrogram", {}).get("f_high", None)
-    hop_length = params.get("mel_spectrogram", {}).get("hop_length", 512)
-    n_fft = params.get("mel_spectrogram", {}).get("n_fft", 2048)
-    db_low = params.get("mel_spectrogram", {}).get("db_low", 60)
-    db_high = params.get("mel_spectrogram", {}).get("db_high", 0)
-    frame_height = params.get("video", {}).get("height", 200)
+    melspec = params.get("mel_spectrogram", {})
+
+    f_low = melspec.get("f_low", 0)
+    f_high = melspec.get("f_high", 22050)
+    hop_length = melspec.get("hop_length", 512)
+    n_fft = melspec.get("n_fft", 2048)
+    n_mels = melspec.get("n_mels", 100)
+
+    print(f' f_low : { melspec["f_low"]}')
+    print(f' f_high: { melspec["f_high"]}')
 
     # Load and resample the audio
     y, sr = load_and_resample_mono(audio_fsp, target_sr)
@@ -603,9 +606,7 @@ def profile_audio(params: Params) -> dict[str, Any]:
         "profiling_chunk_duration", 60
     )
     samples_per_chunk = int(sr * profiling_chunk_duration)
-    max_power_values = []
-    print(f"db_low {db_low}")
-    print(f"db_high {db_high}")
+    global_max_power = 0
     # Process each chunk
     for i in tqdm(range(0, len(y), samples_per_chunk)):
         y_chunk = y[i : i + samples_per_chunk]
@@ -614,17 +615,17 @@ def profile_audio(params: Params) -> dict[str, Any]:
             sr=sr,
             n_fft=n_fft,
             hop_length=hop_length,
-            n_mels=frame_height,
+            n_mels=n_mels,
             fmin=f_low,
             fmax=f_high,
         )
         maxpower = np.max(S)
-        # Append the maximum dB value from this chunk
-        max_power_values.append(maxpower)
+        print(f"profiling chunk max power : {maxpower}")
+        if maxpower > global_max_power:
+            global_max_power = maxpower
 
-    # Return the maximum dB value found across all chunks
     return {
-        "max_power": float(np.max(max_power_values)),
+        "max_power": float(global_max_power),
         "sample_count": len(y),
         "sample_rate": sr,
     }
@@ -642,7 +643,15 @@ def generate_spectrograms(
     audio_fsp = params["input"]
     video = params.get("video", {})
     audiovis = params.get("audio_visualization", {})
+
     melspec = params.get("mel_spectrogram", {})
+    f_low = melspec.get("f_low", 0)
+    f_high = melspec.get("f_high", 22050)
+    hop_length = melspec.get("hop_length", 512)
+    n_fft = melspec.get("n_fft", 2048)
+    n_mels = melspec.get("n_mels", 100)
+    db_low = melspec.get("db_low", -70)
+    db_high = melspec.get("db_high", 0)
 
     max_spectrogram_width = audiovis.get("max_spectrogram_width", 1000)
     logging.info(f"max_spectrogram_width: {max_spectrogram_width}")
@@ -681,21 +690,24 @@ def generate_spectrograms(
         S = librosa.feature.melspectrogram(
             y=y,
             sr=sr,
-            n_fft=melspec.get("n_fft", 2048),
-            hop_length=melspec.get("hop_length", 512),
-            n_mels=melspec.get("n_mels", 100),
-            fmin=melspec.get("f_low", 0),
-            fmax=melspec.get("f_high", sr // 2),
+            n_fft=n_fft,
+            hop_length=hop_length,
+            n_mels=n_mels,
+            fmin=f_low,
+            fmax=f_high,
         )
+
+        print(f"max power : { max_power }")
+        print(f" db_low : { db_low }")
+        print(f" db_high: { db_high }")
+        print(f" f_low : { f_low }")
+        print(f" f_high: { f_high }")
 
         S_dB = librosa.power_to_db(
             S,
-            ref=max_power,  # Adjusted to use max_power if available or max of S
-            amin=10
-            ** (
-                melspec.get("db_low", -80) / 10.0
-            ),  # Providing a default value if not specified
-            top_db=melspec.get("db_high", 80) - melspec.get("db_low", -80),
+            ref=max_power,
+            amin=10 ** (db_low / 10.0),
+            top_db=db_high - db_low,
         )
 
         if (
@@ -712,9 +724,9 @@ def generate_spectrograms(
             S_dB,
             sr=sr,
             cmap=audiovis.get("cmap", "magma"),
-            hop_length=melspec.get("hop_length", 512),
-            fmin=melspec.get("f_low", 0),
-            fmax=melspec.get("f_high", sr // 2),
+            hop_length=hop_length,
+            fmin=f_low,
+            fmax=f_high,
         )
         plt.axis("off")
         plt.tight_layout(pad=0)
