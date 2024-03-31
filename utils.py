@@ -1,9 +1,9 @@
-import yaml
-import json
 import datetime
-import os
-from typing import Any, Dict, Optional
+import glob
 import logging
+import os
+import sys
+from typing import Any, Dict, Optional
 
 # Setup basic logging
 logging.basicConfig(
@@ -39,7 +39,7 @@ logging.basicConfig(
 #     return None
 
 
-def generate_project_folder_name(base_name: Optional[str]) -> str:
+def generate_project_folder_name(base_name: Optional[str], dated: bool) -> str:
     """
     Generate a project folder name using a base name and the current timestamp.
 
@@ -64,11 +64,13 @@ def generate_project_folder_name(base_name: Optional[str]) -> str:
             f"base_name contains characters not allowed in file paths: {base_name}"
         )
 
-    # Get the current timestamp in year-month-day-hour-minute-second format
-    timestamp = datetime.datetime.now().strftime("%y%m%d%H%M%S")
-
+    folder_name = f"{base_name}"
+    if dated:
+        # Get the current timestamp in year-month-day-hour-minute-second format
+        timestamp = datetime.datetime.now().strftime("%y%m%d%H%M%S")
+        folder_name = f"{base_name}-{timestamp}"
     # Concatenate the base name and timestamp to form the folder name
-    folder_name = f"{base_name}-{timestamp}"
+
     return folder_name
 
 
@@ -205,3 +207,60 @@ def create_folder(base_path: str, folder_name: str) -> Optional[str]:
 #         return None
 
 #     return project_data
+
+import os
+import sys
+
+
+def allow_save(fullfilepath: str, allowoverwrite: bool) -> bool:
+    """
+    Determines if a file can be saved based on its existence and the overwrite policy.
+
+    Args:
+        fullfilepath (str): The full path to the file to save.
+        allowoverwrite (bool): Whether overwriting an existing file is allowed.
+
+    Returns:
+        bool: True if the file can be saved, False otherwise.
+    """
+    # Check if the file exists
+    if os.path.exists(fullfilepath):
+        # If overwriting is not allowed, print an error and exit
+        if not allowoverwrite:
+            print(
+                f"Error: File '{fullfilepath}' exists and overwriting is not allowed.  use --overwrite"
+            )
+            sys.exit(1)  # Exit the program with an error code
+        # If overwriting is allowed
+        else:
+            return True
+    # If the file does not exist, it's safe to save
+    else:
+        return True
+
+    return False  # This line is technically redundant due to the sys.exit above
+
+
+def clear_project_media(project_folder: str, basename: str):
+    """
+    Deletes PNG and MP4 files related to a project if overwrite is enabled.
+
+    Args:
+        project_folder (str): The folder where the project files are stored.
+        basename (str): The base name used to identify project files.
+    """
+    # Build patterns for the files to delete
+    png_pattern = os.path.join(project_folder, f"{basename}*.png")
+    mp4_pattern = os.path.join(project_folder, f"{basename}*.mp4")
+
+    # Use glob to find and delete the files matching the patterns
+    for file_path in glob.glob(png_pattern) + glob.glob(mp4_pattern):
+        try:
+            os.remove(file_path)
+            print(f"Deleted {file_path}")
+        except OSError as e:
+            print(f"Error deleting file {file_path}: {e.strerror}")
+
+
+# Example usage
+# clear_project_media("/path/to/project_folder", "project_basename")
