@@ -44,6 +44,10 @@ class Params:
         if args:
             self.overlay_args(args)
 
+    def __repr__(self):
+        # Convert the internal configuration dictionary to a pretty-printed string
+        return json.dumps(self.config, indent=4, sort_keys=True)
+
     def load_yaml_config(self, config_path: str) -> Dict[str, Any]:
         """Loads a YAML configuration file."""
         with open(config_path, "r") as file:

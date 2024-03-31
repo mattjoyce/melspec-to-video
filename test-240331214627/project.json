@@ -1,0 +1,33 @@
+{
+    "project_path": "test-240331214627",
+    "project_file": "project.json",
+    "audio_metadata": {
+        "source_audio_path": "W:\\Google Drive\\Projects\\melspec-to-video",
+        "source_audio_filename": "test.wav",
+        "max_power": 112.21501654199457,
+        "sample_rate": 44100,
+        "sample_count": 39690000
+    },
+    "images_metadata": [
+        {
+            "filename": "test-0000.png",
+            "start_time": 0,
+            "end_time": 225.0
+        },
+        {
+            "filename": "test-0001.png",
+            "start_time": 225.0,
+            "end_time": 450.0
+        },
+        {
+            "filename": "test-0002.png",
+            "start_time": 450.0,
+            "end_time": 675.0
+        },
+        {
+            "filename": "test-0003.png",
+            "start_time": 675.0,
+            "end_time": 900.0
+        }
+    ]
+}
