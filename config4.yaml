@@ -1,8 +1,11 @@
 audio_visualization:
   audio_visual_span: 1
   cmap: magma
-  max_spectrogram_width: 3000
-  playhead_position: 0.5
+  max_spectrogram_width: 5000
+  playhead_position: 0.5  # Centered horizontally
+  playhead_color: "#FFFFFF"  # White, in HEX format
+  playhead_opacity: 0.2  # Slightly transparent
+  playhead_width: 2 # Assuming pixels for thick
   seconds_in_view: 60
   profiling_chunk_duration: 60 
 mel_spectrogram:

@@ -5,7 +5,7 @@ import os
 import subprocess
 import threading
 import time
-from typing import Any, Final, List
+from typing import Any, Final, List, Tuple
 
 import librosa
 import librosa.display
@@ -59,62 +59,105 @@ def load_and_resample_mono(audio_path, target_sr=22050):
     return data_resampled, target_sr
 
 
+from PIL import Image, ImageDraw, ImageFont
+from typing import Tuple
+import math
+
+
 def create_playhead_overlay(
-    frame_number,
-    frame_rate,
-    image_size,
-    playhead_position,
-    line_color=(255, 0, 0, 128),
-    line_width=2,
+    params: Params, frame_number: int, image_size: Tuple[int, int]
 ):
     """
-    Create an overlay image with a semi-transparent playhead line.
+    Create an overlay image with a semi-transparent playhead line indicating the current playback position.
 
-    Parameters:
-    - image_size: A tuple (width, height) specifying the size of the overlay.
-    - playhead_position: A float representing the horizontal position of the playhead (0 to 1).
-    - line_color: A tuple (R, G, B, A) specifying the color and opacity of the line.
-    - line_width: The width of the line in pixels.
+    Args:
+        params (Params): A Params object containing video and audio visualization configurations.
+        frame_number (int): The current frame number in the video sequence.
+        image_size (Tuple[int, int]): The size of the overlay image (width, height).
 
     Returns:
-    - An Image object representing the overlay with the playhead line.
+        Image: An RGBA Image object representing the overlay with the semi-transparent playhead line.
     """
+    frame_rate = params["video"].get("frame_rate", 30)
+    playhead_position = params["audio_visualization"].get("playhead_position", 0.5)
+    playhead_color = params["audio_visualization"].get("playhead_color", "red")
+    playhead_width = params["audio_visualization"].get("playhead_width", 2)
+    playhead_opacity = int(
+        params["audio_visualization"].get("playhead_opacity", 0.8) * 255
+    )
+    image_width, image_height = image_size
+    # Ensure the playhead color is in RGBA format
+    if isinstance(playhead_color, str):
+        # Convert named colors to RGBA with the specified opacity
+        from PIL import ImageColor
+
+        playhead_color_rgba = ImageColor.getcolor(playhead_color, "RGBA")[:3] + (
+            playhead_opacity,
+        )
+    else:
+        # Assume playhead_color is already an RGB tuple and append the opacity
+        playhead_color_rgba = playhead_color + (playhead_opacity,)
+
     # Create a transparent overlay
-    overlay = Image.new("RGBA", image_size, (255, 255, 255, 0))
+    overlay = Image.new("RGBA", image_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
     # Calculate the x position of the playhead line
-    playhead_x = int(playhead_position * image_size[0])
+    playhead_x = int(playhead_position * image_width)
 
     # Draw the semi-transparent playhead line on the overlay
     draw.line(
-        [(playhead_x, 0), (playhead_x, image_size[1])],
-        fill=line_color,
-        width=line_width,
+        [(playhead_x, 0), (playhead_x, image_height)],
+        fill=playhead_color_rgba,
+        width=playhead_width,
     )
 
-    # Calculate the time at the playhead
+    # Calculate the time at the playhead position
     total_seconds = frame_number / frame_rate
-    hours = math.floor(total_seconds / 3600)
-    minutes = math.floor((total_seconds % 3600) / 60)
-    seconds = math.floor(total_seconds % 60)
-    tenths = int(
-        (total_seconds - math.floor(total_seconds)) * 10
-    )  # Get tenths of a second
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
 
     # Format the time mark as text
-    time_mark = f"{hours:02d}:{minutes:02d}:{seconds:02d}.{tenths}"
+    time_mark = f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}.{int((seconds - int(seconds)) * 10)}"
 
     # Draw the time mark text near the playhead line
-    # Adjust the font size and position as needed
-    font = ImageFont.load_default()
-    text_position = (
-        playhead_x + 5,
-        10,
-    )  # Position the text slightly to the right of the playhead line
-    draw.text(text_position, time_mark, fill=line_color, font=font)
+    font = (
+        ImageFont.load_default()
+    )  # Consider using a custom font for better visibility
+    text_position = (playhead_x + 5, 10)  # Adjust text position as needed
+    draw.text(text_position, time_mark, fill=playhead_color_rgba, font=font)
 
     return overlay
+
+
+def adjust_spectrogram_for_playhead(
+    params: Params, image: Image.Image, is_first: bool, is_last: bool
+) -> Image.Image:
+    image = image.convert("RGBA")
+    image_width, image_height = image.size
+    frame_width = params["video"]["width"]
+    playhead_position = params["audio_visualization"].get("playhead_position", 0.5)
+    section_opacity = params["audio_visualization"].get(
+        "section_opacity", 128
+    )  # Semi-transparent by default
+
+    if is_first:
+        lead_in_width = int(frame_width * playhead_position)
+        lead_in_section = Image.new(
+            "RGBA", (lead_in_width, image_height), (0, 0, 255, section_opacity)
+        )
+        print(f"lead in size : {lead_in_section.size}")
+        image = concatenate_images(lead_in_section, image)
+
+    if is_last:
+        play_out_width = int(frame_width * (1 - playhead_position))
+        play_out_section = Image.new(
+            "RGBA", (play_out_width, image_height), (255, 0, 0, section_opacity)
+        )
+        print(f"play out size : {play_out_section.size}")
+        image = concatenate_images(image, play_out_section)
+
+    return image
 
 
 def monitor_memory_usage(interval=1):
@@ -245,11 +288,11 @@ def generate_spectrograms(
             fmax=f_high,
         )
 
-        print(f"max power : { max_power }")
-        print(f" db_low : { db_low }")
-        print(f" db_high: { db_high }")
-        print(f" f_low : { f_low }")
-        print(f" f_high: { f_high }")
+        # print(f"max power : { max_power }")
+        # print(f" db_low : { db_low }")
+        # print(f" db_high: { db_high }")
+        # print(f" f_low : { f_low }")
+        # print(f" f_high: { f_high }")
 
         S_dB = librosa.power_to_db(
             S,
@@ -404,7 +447,9 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
     ## Image Loop
     # Cycle through each image described by the project
     total_images = len(project.get("images_metadata", []))
+    global_frame_count = 0
     for i in range(total_images):
+        print(f"Image number {i} of {total_images}")
         image_metadata = project["images_metadata"][i]
         filename = image_metadata["filename"]
         print(filename)
@@ -420,13 +465,22 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
         print(f"num_frames : {num_frames}")
 
         # get the image
-        current_image = Image.open(os.path.join(project["project_path"], filename))
-        image_width, image_height = current_image.size
+        orig_image = Image.open(os.path.join(project["project_path"], filename))
 
-        print(f"image width : {image_width}")
+        is_first = True if i == 0 else False
+        is_last = True if i == total_images - 1 else False
+
+        current_image = orig_image
+        if params["audio_visualization"].get("playhead_position", None):
+            current_image = adjust_spectrogram_for_playhead(
+                params, orig_image, is_first, is_last
+            )
+
+        spectrogram_width, spectrogram_height = orig_image.size
+        print(f"spectrogram_width : {spectrogram_width}")
 
         # number of pixels to slide for each frame
-        step_px = image_width / num_frames
+        step_px = spectrogram_width / num_frames
         print(f"step_px : {step_px}")
 
         # extend the image to cover the join
@@ -444,21 +498,29 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
             pass
 
         for i in range(num_frames):
-
+            global_frame_count += 1
             crop_start_x = int(i * step_px)
             crop_end_x = int(crop_start_x + frame_width)
 
             cropped_frame = current_image.crop(
                 (crop_start_x, 0, crop_end_x, frame_height)
             )
+            cropped_frame_rgba = cropped_frame.convert("RGBA")
+            ### Insert frame overlays
+            playhead_overlay_rgba = create_playhead_overlay(
+                params, global_frame_count, cropped_frame_rgba.size
+            )
 
+            final_frame = Image.alpha_composite(
+                cropped_frame_rgba, playhead_overlay_rgba
+            )
             # Convert the image to bytes
-            cropped_frame_rgb = cropped_frame.convert("RGB")
-            cropped_frame_bytes = cropped_frame_rgb.tobytes()
+            final_frame_rgb = final_frame.convert("RGB")
+            final_frame_bytes = final_frame_rgb.tobytes()
 
             # Write the frame bytes to ffmpeg's stdin
             if ffmpeg_process.stdin is not None:
-                ffmpeg_process.stdin.write(cropped_frame_bytes)
+                ffmpeg_process.stdin.write(final_frame_bytes)
 
     # Close ffmpeg's stdin to signal end of input
     # ffmpeg_process.wait()
@@ -469,11 +531,15 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
 
 
 def concatenate_images(image1, image2):
-    """Concatenate image2 to the right side of image1."""
+    """Concatenate image2 to the right side of image1, ensuring both are RGBA."""
+    # Ensure both images are in RGBA mode
+    image1 = image1.convert("RGBA")
+    image2 = image2.convert("RGBA")
+
     new_width = image1.width + image2.width
-    new_img = Image.new("RGB", (new_width, image1.height))
-    new_img.paste(image1, (0, 0))
-    new_img.paste(image2, (image1.width, 0))
+    new_img = Image.new("RGBA", (new_width, image1.height))
+    new_img.paste(image1, (0, 0), image1)
+    new_img.paste(image2, (image1.width, 0), image2)
     return new_img
 
 
