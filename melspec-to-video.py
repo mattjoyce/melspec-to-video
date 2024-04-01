@@ -134,9 +134,9 @@ def adjust_spectrogram_for_playhead(
     params: Params, image: Image.Image, is_first: bool, is_last: bool
 ) -> Image.Image:
     image = image.convert("RGBA")
-    image_width, image_height = image.size
     frame_width = params["video"]["width"]
     playhead_position = params["audio_visualization"].get("playhead_position", 0.5)
+    print(f"playhead : {playhead_position}")
     section_opacity = params["audio_visualization"].get(
         "section_opacity", 128
     )  # Semi-transparent by default
@@ -144,7 +144,7 @@ def adjust_spectrogram_for_playhead(
     if is_first:
         lead_in_width = int(frame_width * playhead_position)
         lead_in_section = Image.new(
-            "RGBA", (lead_in_width, image_height), (0, 0, 255, section_opacity)
+            "RGBA", (lead_in_width, image.height), (0, 0, 255, section_opacity)
         )
         print(f"lead in size : {lead_in_section.size}")
         image = concatenate_images(lead_in_section, image)
@@ -152,7 +152,7 @@ def adjust_spectrogram_for_playhead(
     if is_last:
         play_out_width = int(frame_width * (1 - playhead_position))
         play_out_section = Image.new(
-            "RGBA", (play_out_width, image_height), (255, 0, 0, section_opacity)
+            "RGBA", (play_out_width, image.height), (255, 0, 0, section_opacity)
         )
         print(f"play out size : {play_out_section.size}")
         image = concatenate_images(image, play_out_section)
@@ -174,6 +174,8 @@ def monitor_memory_usage(interval=1):
 def profile_audio(params: Params) -> dict[str, Any]:
     """Function to derive the global max power reference from an audio file."""
     # Initialization and configuration extraction
+    logging.info("Profiling start")
+
     audio_fsp = params["input"]
     logging.info(f"Audio file in: {audio_fsp}")
     target_sr = params["sr"]
@@ -227,7 +229,7 @@ def generate_spectrograms(
     project: Params,
 ) -> bool:
     """Function processes the audio, creates a series of wide Mel spectrogram PNG files."""
-
+    logging.info("Spectrogram generation start")
     images_metadata = []  # each image will have an entry with it's metadata
     audio_metadata = project["audio_metadata"]
     max_power = audio_metadata.get("max_power")
@@ -356,13 +358,7 @@ def generate_spectrograms(
     return True
 
 
-def render_project_to_mp4(params: Params, project: Params) -> bool:
-    """Function to produce MP$ video from a spectrogram
-
-    This approach uses a sliding window crop to sample the spectrogram images, and feed to ffmpeg to encode.
-
-    """
-
+def get_ffmpeg_cmd(params: Params, project: Params) -> List[str]:
     # localise some variable we will use frequently
     video_fsp = os.path.join(project["project_path"], params["output"])
     print(video_fsp)
@@ -371,14 +367,6 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
     frame_width: Final[int] = params["video"].get("width", 800)
     frame_height: Final[int] = params["video"].get("height", 200)
     frame_rate: Final[int] = params["video"].get("frame_rate", 30)
-
-    print(f"frame_height: {frame_height}")
-    print(f"frame_width: {frame_width}")
-
-    # duration_in_view: The amount of audio duration (in seconds) represented in a single frame of the video.
-    # This determines how much of the audio waveform is 'in view' in the spectrogram for each frame,
-    # affecting the visual pacing of the spectrogram scroll in the final video.
-    seconds_in_view: Final[int] = params["audio_visualization"]["seconds_in_view"]
 
     ffmpeg_cmd_cpu: List[str] = [
         "ffmpeg",
@@ -437,51 +425,105 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
     if params.get("cpu", None):
         ffmpeg_cmd = ffmpeg_cmd_cpu
 
+    return ffmpeg_cmd
+
+
+def render_project_to_mp4(params: Params, project: Params) -> bool:
+    """Function to produce MP$ video from a spectrogram
+
+    This approach uses a sliding window crop to sample the spectrogram images, and feed to ffmpeg to encode.
+
+    """
+    logging.info("MP$ Encoding start")
+    # localise some variable we will use frequently
+    video_fsp = os.path.join(project["project_path"], params["output"])
+    print(video_fsp)
+
+    # geometry of resulting mp4
+    frame_width: Final[int] = params["video"].get("width", 800)
+    frame_height: Final[int] = params["video"].get("height", 200)
+    frame_rate: Final[int] = params["video"].get("frame_rate", 30)
+
+    print(f"frame_height: {frame_height}")
+    print(f"frame_width: {frame_width}")
+
+    playhead_position: Final = params["audio_visualization"].get(
+        "playhead_position", {}
+    )
+    seconds_in_view: Final = params["audio_visualization"]["seconds_in_view"]
+
+    # get the ffmpeg command line parameter for gpu, or cpu
+    ffmpeg_cmd = get_ffmpeg_cmd(params, project)
     print(ffmpeg_cmd)
 
-    with open("ffmpeg_log.txt", "wb") as log_file:
+    # create the encoder pipe so we can stream the frames
+    with open(
+        os.path.join(project["project_path"], "ffmpeg_log.txt"), "wb"
+    ) as log_file:
         ffmpeg_process: subprocess.Popen = subprocess.Popen(
             ffmpeg_cmd, stdin=subprocess.PIPE, stdout=log_file, stderr=subprocess.STDOUT
         )
 
     ## Image Loop
     # Cycle through each image described by the project
+
+    # counthe images in the metadata
     total_images = len(project.get("images_metadata", []))
+
+    # setup a global counmt, we use this to calculate time in overlay
     global_frame_count = 0
+
+    # step through each spectrograph image
     for i in range(total_images):
-        print(f"Image number {i} of {total_images}")
+        # first and last may need treatment
+        is_first = True if i == 0 else False
+        is_last = True if i == total_images - 1 else False
+
+        print(f"Image number {i+1} of {total_images}")
         image_metadata = project["images_metadata"][i]
         filename = image_metadata["filename"]
         print(filename)
         start_time = image_metadata["start_time"]
         end_time = image_metadata["end_time"]
 
-        # duration of audio, the image represents
+        # duration of audio the spectrogram image represents
         image_duration = end_time - start_time
         print(f"image_duration : {image_duration}")
 
-        # the number of frame we need to render
-        num_frames = int(image_duration * frame_rate)
-        print(f"num_frames : {num_frames}")
+        # retrieve the image
+        spectrogram_image = Image.open(os.path.join(project["project_path"], filename))
 
-        # get the image
-        orig_image = Image.open(os.path.join(project["project_path"], filename))
+        work_image = spectrogram_image
 
-        is_first = True if i == 0 else False
-        is_last = True if i == total_images - 1 else False
-
-        current_image = orig_image
+        # add overlay to the image and add a lead in if #1
         if params["audio_visualization"].get("playhead_position", None):
-            current_image = adjust_spectrogram_for_playhead(
-                params, orig_image, is_first, is_last
+            work_image = adjust_spectrogram_for_playhead(
+                params, spectrogram_image, is_first, is_last
             )
 
-        spectrogram_width, spectrogram_height = orig_image.size
-        print(f"spectrogram_width : {spectrogram_width}")
+        # the number of frame we need to render the spectrograms
+        num_frames = int(image_duration * frame_rate)
 
         # number of pixels to slide for each frame
-        step_px = spectrogram_width / num_frames
+        step_px = spectrogram_image.width / num_frames
         print(f"step_px : {step_px}")
+
+        # calculate how much time is used for the lead-in
+        lead_in_duration = seconds_in_view * playhead_position
+        print(f"lead in duration : {lead_in_duration}")
+        lead_in_frames = int((lead_in_duration) * frame_rate)
+        if is_first:
+            num_frames += lead_in_frames
+            print(f"lead in frames : {lead_in_frames}")
+
+        if is_last:
+            num_frames -= lead_in_frames
+            print(f"lead in frames : {lead_in_frames}")
+
+        print(f"num_frames: {num_frames}")
+
+        # check
+        # work_image.save(os.path.join(project["project_path"], f"adjusted-{filename}"))
 
         # extend the image to cover the join
         if i < total_images - 1:
@@ -492,19 +534,14 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
             )
             # Assume frame_width is the width of the frame to append from the next image
             next_image_section = next_image.crop((0, 0, frame_width, frame_height))
-            current_image = concatenate_images(current_image, next_image_section)
-        else:
-            # Handle the last image separately if needed
-            pass
+            work_image = concatenate_images(work_image, next_image_section)
 
         for i in range(num_frames):
             global_frame_count += 1
             crop_start_x = int(i * step_px)
             crop_end_x = int(crop_start_x + frame_width)
 
-            cropped_frame = current_image.crop(
-                (crop_start_x, 0, crop_end_x, frame_height)
-            )
+            cropped_frame = work_image.crop((crop_start_x, 0, crop_end_x, frame_height))
             cropped_frame_rgba = cropped_frame.convert("RGBA")
             ### Insert frame overlays
             playhead_overlay_rgba = create_playhead_overlay(
@@ -658,9 +695,9 @@ def main():
     project["audio_metadata"]["source_audio_path"] = directory_path
     project["audio_metadata"]["source_audio_filename"] = args.input
 
-    maxpower = project["audio_metadata"].get("max_power")
-    sample_rate = project["audio_metadata"].get("sample_rate")
-    sample_count = project["audio_metadata"].get("sample_count")
+    maxpower = project["audio_metadata"].get("max_power", None)
+    sample_rate = project["audio_metadata"].get("sample_rate", None)
+    sample_count = project["audio_metadata"].get("sample_count", None)
     if any(value is None for value in [maxpower, sample_rate, sample_count]):
         # This block executes if any of maxpower, sample_rate, or sample_count is None
         profile = profile_audio(params)  #
