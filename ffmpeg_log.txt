@@ -1,27 +1,0 @@
-ffmpeg version 6.1.1-full_build-www.gyan.dev Copyright (c) 2000-2023 the FFmpeg developers
-  built with gcc 12.2.0 (Rev10, Built by MSYS2 project)
-  configuration: --enable-gpl --enable-version3 --enable-static --pkg-config=pkgconf --disable-w32threads --disable-autodetect --enable-fontconfig --enable-iconv --enable-gnutls --enable-libxml2 --enable-gmp --enable-bzlib --enable-lzma --enable-libsnappy --enable-zlib --enable-librist --enable-libsrt --enable-libssh --enable-libzmq --enable-avisynth --enable-libbluray --enable-libcaca --enable-sdl2 --enable-libaribb24 --enable-libaribcaption --enable-libdav1d --enable-libdavs2 --enable-libuavs3d --enable-libzvbi --enable-librav1e --enable-libsvtav1 --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxavs2 --enable-libxvid --enable-libaom --enable-libjxl --enable-libopenjpeg --enable-libvpx --enable-mediafoundation --enable-libass --enable-frei0r --enable-libfreetype --enable-libfribidi --enable-libharfbuzz --enable-liblensfun --enable-libvidstab --enable-libvmaf --enable-libzimg --enable-amf --enable-cuda-llvm --enable-cuvid --enable-ffnvcodec --enable-nvdec --enable-nvenc --enable-dxva2 --enable-d3d11va --enable-libvpl --enable-libshaderc --enable-vulkan --enable-libplacebo --enable-opencl --enable-libcdio --enable-libgme --enable-libmodplug --enable-libopenmpt --enable-libopencore-amrwb --enable-libmp3lame --enable-libshine --enable-libtheora --enable-libtwolame --enable-libvo-amrwbenc --enable-libcodec2 --enable-libilbc --enable-libgsm --enable-libopencore-amrnb --enable-libopus --enable-libspeex --enable-libvorbis --enable-ladspa --enable-libbs2b --enable-libflite --enable-libmysofa --enable-librubberband --enable-libsoxr --enable-chromaprint
-  libavutil      58. 29.100 / 58. 29.100
-  libavcodec     60. 31.102 / 60. 31.102
-  libavformat    60. 16.100 / 60. 16.100
-  libavdevice    60.  3.100 / 60.  3.100
-  libavfilter     9. 12.100 /  9. 12.100
-  libswscale      7.  5.100 /  7.  5.100
-  libswresample   4. 12.100 /  4. 12.100
-  libpostproc    57.  3.100 / 57.  3.100
-Input #0, rawvideo, from 'fd:':
-  Duration: N/A, start: 0.000000, bitrate: 57600 kb/s
-  Stream #0:0: Video: rawvideo (RGB[24] / 0x18424752), rgb24, 400x200, 57600 kb/s, 30 tbr, 30 tbn
-[out#0/mp4 @ 00000285b61735c0] Codec AVOption crf (Select the quality for constant quality mode) has not been used for any stream. The most likely reason is either wrong type (e.g. a video option with no video streams) or that it is a private option of some encoder which was not actually used for any stream.
-Stream mapping:
-  Stream #0:0 -> #0:0 (rawvideo (native) -> h264 (h264_nvenc))
-Output #0, mp4, to 'output.mp4':
-  Metadata:
-    encoder         : Lavf60.16.100
-  Stream #0:0: Video: h264 (Main) (avc1 / 0x31637661), yuv420p(tv, progressive), 400x200, q=2-31, 2000 kb/s, 30 fps, 15360 tbn
-    Metadata:
-      encoder         : Lavc60.31.102 h264_nvenc
-    Side data:
-      cpb: bitrate max/min/avg: 0/0/2000000 buffer size: 4000000 vbv_delay: N/A
-frame=    0 fps=0.0 q=0.0 size=       0kB time=N/A bitrate=N/A speed=N/A    frame=   26 fps=0.0 q=12.0 size=       0kB time=00:00:00.76 bitrate=   0.5kbits/s speed=1.53x    frame=  795 fps=794 q=8.0 size=    1792kB time=00:00:26.40 bitrate= 556.1kbits/s speed=26.4x    frame= 1589 fps=1058 q=8.0 size=    3584kB time=00:00:52.86 bitrate= 555.4kbits/s speed=35.2x    frame= 2039 fps=988 q=10.0 size=    4864kB time=00:01:07.86 bitrate= 587.1kbits/s speed=32.9x    [out#0/mp4 @ 00000285b61735c0] video:5289kB audio:0kB subtitle:0kB other streams:0kB global headers:0kB muxing overhead: 0.509298%
-frame= 2223 fps=1025 q=9.0 Lsize=    5316kB time=00:01:13.96 bitrate= 588.8kbits/s speed=34.1x    
