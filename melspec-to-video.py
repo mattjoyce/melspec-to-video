@@ -1,10 +1,10 @@
 import argparse
 import logging
-import math
-import os
 import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any, Final, List, Tuple
 
 import librosa
@@ -13,11 +13,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import psutil
 import soundfile as sf
-from params import Params
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageFont
 from tqdm import tqdm
 
 import utils
+from params import Params
 
 # Mel Scale Spectrogram Video from Audio
 
@@ -59,11 +59,6 @@ def load_and_resample_mono(audio_path, target_sr=22050):
     return data_resampled, target_sr
 
 
-from PIL import Image, ImageDraw, ImageFont
-from typing import Tuple
-import math
-
-
 def create_playhead_overlay(
     params: Params, frame_number: int, image_size: Tuple[int, int]
 ):
@@ -80,26 +75,14 @@ def create_playhead_overlay(
     """
     frame_rate = params["video"].get("frame_rate", 30)
     playhead_position = params["audio_visualization"].get("playhead_position", 0.5)
-    playhead_color = params["audio_visualization"].get("playhead_color", "red")
-    playhead_width = params["audio_visualization"].get("playhead_width", 2)
-    playhead_opacity = int(
-        params["audio_visualization"].get("playhead_opacity", 0.8) * 255
+    playhead_rgba = tuple(
+        params["audio_visualization"].get("playhead_grba", [255, 255, 255, 192])
     )
+    playhead_width = params["audio_visualization"].get("playhead_width", 2)
     image_width, image_height = image_size
-    # Ensure the playhead color is in RGBA format
-    if isinstance(playhead_color, str):
-        # Convert named colors to RGBA with the specified opacity
-        from PIL import ImageColor
-
-        playhead_color_rgba = ImageColor.getcolor(playhead_color, "RGBA")[:3] + (
-            playhead_opacity,
-        )
-    else:
-        # Assume playhead_color is already an RGB tuple and append the opacity
-        playhead_color_rgba = playhead_color + (playhead_opacity,)
 
     # Create a transparent overlay
-    overlay = Image.new("RGBA", image_size, (0, 0, 0, 0))
+    overlay = Image.new("RGBA", image_size, playhead_rgba)
     draw = ImageDraw.Draw(overlay)
 
     # Calculate the x position of the playhead line
@@ -108,7 +91,7 @@ def create_playhead_overlay(
     # Draw the semi-transparent playhead line on the overlay
     draw.line(
         [(playhead_x, 0), (playhead_x, image_height)],
-        fill=playhead_color_rgba,
+        fill=playhead_rgba,
         width=playhead_width,
     )
 
@@ -125,7 +108,7 @@ def create_playhead_overlay(
         ImageFont.load_default()
     )  # Consider using a custom font for better visibility
     text_position = (playhead_x + 5, 10)  # Adjust text position as needed
-    draw.text(text_position, time_mark, fill=playhead_color_rgba, font=font)
+    draw.text(text_position, time_mark, fill=playhead_rgba, font=font)
 
     return overlay
 
@@ -233,7 +216,7 @@ def generate_spectrograms(
     images_metadata = []  # each image will have an entry with it's metadata
     audio_metadata = project["audio_metadata"]
     max_power = audio_metadata.get("max_power")
-    audio_fsp = params["input"]
+    audio_fsp = audio_metadata["source_audio_path"]
     video = params.get("video", {})
     audiovis = params.get("audio_visualization", {})
 
@@ -266,7 +249,7 @@ def generate_spectrograms(
     count = 0
     progress_bar = tqdm(total=total_duration_secs)
     while current_position_secs < total_duration_secs:
-        # print(f"{current_position_secs} / {total_duration_secs}")
+        # print(f'{current_position_secs} / {total_duration_secs}')
 
         duration_secs = min(
             y_chunk_samples / target_sample_rate,
@@ -290,11 +273,11 @@ def generate_spectrograms(
             fmax=f_high,
         )
 
-        # print(f"max power : { max_power }")
-        # print(f" db_low : { db_low }")
-        # print(f" db_high: { db_high }")
-        # print(f" f_low : { f_low }")
-        # print(f" f_high: { f_high }")
+        # print(f'max power : { max_power }')
+        # print(f' db_low : { db_low }')
+        # print(f' db_high: { db_high }')
+        # print(f' f_low : { f_low }')
+        # print(f' f_high: { f_high }')
 
         S_dB = librosa.power_to_db(
             S,
@@ -324,9 +307,9 @@ def generate_spectrograms(
         plt.axis("off")
         plt.tight_layout(pad=0)
 
-        basename = os.path.splitext(audio_metadata["source_audio_filename"])[0]
+        basename = Path(audio_metadata["source_audio_path"]).stem
         image_filename = f"{basename}-{count:04d}.png"
-        image_path = os.path.join(project["project_path"], image_filename)
+        image_path = Path(project["project_path"]) / image_filename
 
         if utils.allow_save(image_path, params.get("overwrite", None)):
             plt.savefig(
@@ -353,14 +336,15 @@ def generate_spectrograms(
         count += 1
     progress_bar.close()
     project["images_metadata"] = images_metadata
-    project.save_to_json(os.path.join(project["project_path"], project["project_file"]))
+    print(project)
+    project.save_to_json(Path(project["project_file"]))
 
     return True
 
 
 def get_ffmpeg_cmd(params: Params, project: Params) -> List[str]:
     # localise some variable we will use frequently
-    video_fsp = os.path.join(project["project_path"], params["output"])
+    video_fsp = Path(project["project_path"]) / params["output"]
     print(video_fsp)
 
     # geometry of resulting mp4
@@ -434,9 +418,9 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
     This approach uses a sliding window crop to sample the spectrogram images, and feed to ffmpeg to encode.
 
     """
-    logging.info("MP$ Encoding start")
+    logging.info("MP4 Encoding start")
     # localise some variable we will use frequently
-    video_fsp = os.path.join(project["project_path"], params["output"])
+    video_fsp = Path(project["project_path"]) / params["output"]
     print(video_fsp)
 
     # geometry of resulting mp4
@@ -457,9 +441,7 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
     print(ffmpeg_cmd)
 
     # create the encoder pipe so we can stream the frames
-    with open(
-        os.path.join(project["project_path"], "ffmpeg_log.txt"), "wb"
-    ) as log_file:
+    with open(Path(project["project_path"]) / "ffmpeg_log.txt", "wb") as log_file:
         ffmpeg_process: subprocess.Popen = subprocess.Popen(
             ffmpeg_cmd, stdin=subprocess.PIPE, stdout=log_file, stderr=subprocess.STDOUT
         )
@@ -491,7 +473,7 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
         print(f"image_duration : {image_duration}")
 
         # retrieve the image
-        spectrogram_image = Image.open(os.path.join(project["project_path"], filename))
+        spectrogram_image = Image.open(Path(project["project_path"]) / filename)
 
         work_image = spectrogram_image
 
@@ -523,15 +505,13 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
         print(f"num_frames: {num_frames}")
 
         # check
-        # work_image.save(os.path.join(project["project_path"], f"adjusted-{filename}"))
+        # work_image.save(Path(project["project_path"] / f"adjusted-{filename}"))
 
         # extend the image to cover the join
         if i < total_images - 1:
             next_image_metadata = project["images_metadata"][i + 1]
             next_filename = next_image_metadata["filename"]
-            next_image = Image.open(
-                os.path.join(project["project_path"], next_filename)
-            )
+            next_image = Image.open(Path(project["project_path"]) / next_filename)
             # Assume frame_width is the width of the frame to append from the next image
             next_image_section = next_image.crop((0, 0, frame_width, frame_height))
             work_image = concatenate_images(work_image, next_image_section)
@@ -633,57 +613,65 @@ def main():
     )
 
     parser.add_argument(
-        "-d",
-        "--dated",
+        "--overwrite",
         action="store_true",
         default=None,
     )
 
     parser.add_argument(
-        "--overwrite",
+        "-p",
+        "--path",
+        help="Path to project folder, if ommited, current folder will be used.",
         action="store_true",
         default=None,
     )
 
     args = parser.parse_args()
     params = Params(args.config, args=args, file_type="yaml")
+
+    # resolve all paths and check as needed
+    config_path = Path(args.config).resolve()
+    if not config_path.exists():
+        logging.error(f"Config does not exist : {config_path}")
+        sys.exit()
+    else:
+        print(f"Config file : {config_path}")
+
+    source_audio_path = Path(args.input).resolve()
+    if not source_audio_path.exists():
+        logging.error(f"Input does not exist : {source_audio_path}")
+        sys.exit()
+    else:
+        print(f"Source Audio Path : {source_audio_path}")
+
+    # the mp4 file - will be tested later and overwriten if needed
+    output_path = Path(args.output).resolve()
+
     print(params)
 
-    full_path = os.path.abspath(args.input)
-    directory_path = os.path.dirname(full_path)
-    filename = os.path.basename(full_path)
-    basename, extension = os.path.splitext(filename)
-
-    print(f"The full path of the input file is: {full_path}")
-
-    project_folder = utils.generate_project_folder_name(
-        basename, params.get("dated", None)
-    )
-
-    if not os.path.exists(project_folder):
-        utils.create_folder(directory_path, project_folder)
+    if args.path:
+        project_path = Path(args.path).resolve()
+        if not project_path.exists():
+            logging.error(f"Project folder does not exist : {project_path}")
+            sys.exit()
     else:
-        print("project folder exists")
+        project_path = Path.cwd().resolve()
+    print(f"Project path : {project_path}")
 
-    if params.get("overwrite", None):
-        basename = os.path.split(params["input"])[0]
-        print(f"Deleting project media from {project_folder}")
-        utils.clear_project_media(project_folder, basename)
+    project_json_path = Path(project_path) / "project.json"
+    print(f"Project file : {project_json_path}")
+    print(project_json_path)
 
-    print(f"Project folder : {project_folder}")
-
-    json_filename = os.path.join(project_folder, "project.json")
-
-    if os.path.exists(json_filename):
+    if project_json_path.exists():
         print("Using existing project file")
-        project = Params(file_path=json_filename, file_type="json")
+        project = Params(file_path=project_json_path, file_type="json")
+        print(project)
     else:
         default_project_structure = {
-            "project_path": project_folder,
-            "project_file": "project.json",
+            "project_path": str(project_path),
+            "project_file": str(project_json_path),
             "audio_metadata": {
-                "source_audio_path": "",
-                "source_audio_filename": "",
+                "source_audio_path": str(source_audio_path),
                 "max_power": None,
                 "sample_rate": None,
                 "sample_count": None,
@@ -692,8 +680,7 @@ def main():
         }
         project = Params(default_config=default_project_structure)
 
-    project["audio_metadata"]["source_audio_path"] = directory_path
-    project["audio_metadata"]["source_audio_filename"] = args.input
+    project["audio_metadata"]["source_audio_path"] = str(source_audio_path)
 
     maxpower = project["audio_metadata"].get("max_power", None)
     sample_rate = project["audio_metadata"].get("sample_rate", None)
@@ -704,7 +691,7 @@ def main():
         print(f"Profile : {profile}")
         project["audio_metadata"].update(profile)
 
-    project.save_to_json(json_filename)
+    project.save_to_json(str(project_json_path))
     print(f"project data : {project}")
     ### PASS 2
     # Generate the spectrograms

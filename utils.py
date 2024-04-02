@@ -3,7 +3,8 @@ import glob
 import logging
 import os
 import sys
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 
 # Setup basic logging
 logging.basicConfig(
@@ -212,7 +213,7 @@ import os
 import sys
 
 
-def allow_save(fullfilepath: str, allowoverwrite: bool) -> bool:
+def allow_save(fullfilepath: Path, allowoverwrite: bool) -> bool:
     """
     Determines if a file can be saved based on its existence and the overwrite policy.
 
@@ -224,7 +225,7 @@ def allow_save(fullfilepath: str, allowoverwrite: bool) -> bool:
         bool: True if the file can be saved, False otherwise.
     """
     # Check if the file exists
-    if os.path.exists(fullfilepath):
+    if fullfilepath.exists:
         # If overwriting is not allowed, print an error and exit
         if not allowoverwrite:
             print(
