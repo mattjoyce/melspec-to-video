@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import psutil
 import soundfile as sf
-from PIL import Image, ImageColor, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 from tqdm import tqdm
 
 from params import Params
@@ -57,7 +57,7 @@ def allow_save(fullfilepath: Path, allowoverwrite: bool) -> bool:
         bool: True if the file can be saved, False otherwise.
     """
     # Check if the file exists
-    if fullfilepath.exists:
+    if fullfilepath.exists():
         # If overwriting is not allowed, print an error and exit
         if not allowoverwrite:
             print(
@@ -106,6 +106,7 @@ def create_playhead_overlay(
     playhead_rgba = tuple(
         params["audio_visualization"].get("playhead_rgba", [255, 255, 255, 192])
     )
+
     playhead_width = params["audio_visualization"].get("playhead_width", 2)
     image_width, image_height = image_size
 
@@ -362,7 +363,7 @@ def generate_spectrograms(
     progress_bar.close()
     project["images_metadata"] = images_metadata
     print(project)
-    project.save_to_json(Path(project["project_file"]))
+    project.save_to_json(project["project_file"])
 
     return True
 
