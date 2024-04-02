@@ -16,7 +16,6 @@ import soundfile as sf
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 from tqdm import tqdm
 
-import utils
 from params import Params
 
 # Mel Scale Spectrogram Video from Audio
@@ -44,6 +43,35 @@ logging.basicConfig(
 # these are used as globasl to track memory usgae
 memory_usage = 0
 max_mem = 0  # maximum allowed mem usage in %
+
+
+def allow_save(fullfilepath: Path, allowoverwrite: bool) -> bool:
+    """
+    Determines if a file can be saved based on its existence and the overwrite policy.
+
+    Args:
+        fullfilepath (str): The full path to the file to save.
+        allowoverwrite (bool): Whether overwriting an existing file is allowed.
+
+    Returns:
+        bool: True if the file can be saved, False otherwise.
+    """
+    # Check if the file exists
+    if fullfilepath.exists:
+        # If overwriting is not allowed, print an error and exit
+        if not allowoverwrite:
+            print(
+                f"Error: File '{fullfilepath}' exists and overwriting is not allowed.  use --overwrite"
+            )
+            sys.exit(1)  # Exit the program with an error code
+        # If overwriting is allowed
+        else:
+            return True
+    # If the file does not exist, it's safe to save
+    else:
+        return True
+
+    return False  # This line is technically redundant due to the sys.exit above
 
 
 def load_and_resample_mono(audio_path, target_sr=22050):
@@ -311,7 +339,7 @@ def generate_spectrograms(
         image_filename = f"{basename}-{count:04d}.png"
         image_path = Path(project["project_path"]) / image_filename
 
-        if utils.allow_save(image_path, params.get("overwrite", None)):
+        if allow_save(image_path, params.get("overwrite", None)):
             plt.savefig(
                 image_path,
                 bbox_inches="tight",
