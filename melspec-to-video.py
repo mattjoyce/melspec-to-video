@@ -1,40 +1,39 @@
-import subprocess
-import time
-import math
-
-import logging
 import argparse
-
+import logging
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+from typing import Any, Final, List, Tuple
 
 import librosa
 import librosa.display
 import matplotlib.pyplot as plt
 import numpy as np
-import yaml
-from matplotlib.colors import LinearSegmentedColormap
-from PIL import Image, ImageDraw, ImageFont
-
-import threading
 import psutil
+import soundfile as sf
+from PIL import Image, ImageDraw, ImageFont
+from tqdm import tqdm
 
+from params import Params
 
-"""
-Mel Scale Spectrogram Video from Audio
+# Mel Scale Spectrogram Video from Audio
 
-This script transforms audio files into visual spectrogram representations and encodes them into a video file. 
-It leverages librosa for audio processing and Mel spectrogram generation, matplotlib for plotting, and FFmpeg for video encoding.
+# This script transforms audio files into visual spectrogram representations and encodes them into a video file.
+# It leverages librosa for audio processing and Mel spectrogram generation, matplotlib for plotting, and FFmpeg for video encoding.
 
-Configuration is managed via a YAML file, allowing customization of video dimensions, frame rate, audio processing parameters, and optional color palettes for the spectrogram. 
-The script supports dynamic adjustment of spectrogram image widths based on audio chunk sizes, ensuring smooth transitions and consistent visual output across the video.
+# Configuration is managed via a YAML file, allowing customization of video dimensions, frame rate, audio processing parameters, and optional color palettes for the spectrogram.
+# The script supports dynamic adjustment of spectrogram image widths based on audio chunk sizes, ensuring smooth transitions and consistent visual output across the video.
 
-Features include:
-- Loading and processing of audio data in configurable chunks.
-- Generation of Mel spectrograms from audio data, with optional normalization against a global max power level.
-- Customizable spectrogram color mapping.
-- Efficient video encoding using FFmpeg, with parameters for quality and compatibility.
+# Features include:
+# - Loading and processing of audio data in configurable chunks.
+# - Generation of Mel spectrograms from audio data, with optional normalization against a global max power level.
+# - Customizable spectrogram color mapping.
+# - Efficient video encoding using FFmpeg, with parameters for quality and compatibility.
 
-Designed for flexibility and efficiency, this tool is suited for researchers, musicians, bioaucoustic field recordists, and audiovisual artists looking to create detailed and customized visualizations of audio data.
-"""
+# Designed for flexibility and efficiency, this tool is suited for researchers, musicians, bioaucoustic field recordists, and audiovisual artists looking to create detailed and customized visualizations of audio data.
+
 
 # Setup basic logging
 logging.basicConfig(
@@ -46,62 +45,128 @@ memory_usage = 0
 max_mem = 0  # maximum allowed mem usage in %
 
 
-def create_playhead_overlay(
-    frame_number,
-    frame_rate,
-    image_size,
-    playhead_position,
-    line_color=(255, 0, 0, 128),
-    line_width=2,
-):
+def allow_save(fullfilepath: Path, allowoverwrite: bool) -> bool:
     """
-    Create an overlay image with a semi-transparent playhead line.
+    Determines if a file can be saved based on its existence and the overwrite policy.
 
-    Parameters:
-    - image_size: A tuple (width, height) specifying the size of the overlay.
-    - playhead_position: A float representing the horizontal position of the playhead (0 to 1).
-    - line_color: A tuple (R, G, B, A) specifying the color and opacity of the line.
-    - line_width: The width of the line in pixels.
+    Args:
+        fullfilepath (str): The full path to the file to save.
+        allowoverwrite (bool): Whether overwriting an existing file is allowed.
 
     Returns:
-    - An Image object representing the overlay with the playhead line.
+        bool: True if the file can be saved, False otherwise.
     """
+    # Check if the file exists
+    if fullfilepath.exists():
+        # If overwriting is not allowed, print an error and exit
+        if not allowoverwrite:
+            print(
+                f"Error: File '{fullfilepath}' exists and overwriting is not allowed.  use --overwrite"
+            )
+            sys.exit(1)  # Exit the program with an error code
+        # If overwriting is allowed
+        else:
+            return True
+    # If the file does not exist, it's safe to save
+    else:
+        return True
+
+    return False  # This line is technically redundant due to the sys.exit above
+
+
+def load_and_resample_mono(audio_path, target_sr=22050):
+    # Load and resample audio file
+    data, samplerate = sf.read(audio_path)
+
+    # if there are multiple dimensions, it's not mono, avarage them
+    if data.ndim > 1:
+        logging.info(f"Converting to mono")
+        data = np.mean(data, axis=1)  # Convert to mono
+
+    data_resampled = librosa.resample(data, orig_sr=samplerate, target_sr=target_sr)
+    return data_resampled, target_sr
+
+
+def create_playhead_overlay(
+    params: Params, frame_number: int, image_size: Tuple[int, int]
+):
+    """
+    Create an overlay image with a semi-transparent playhead line indicating the current playback position.
+
+    Args:
+        params (Params): A Params object containing video and audio visualization configurations.
+        frame_number (int): The current frame number in the video sequence.
+        image_size (Tuple[int, int]): The size of the overlay image (width, height).
+
+    Returns:
+        Image: An RGBA Image object representing the overlay with the semi-transparent playhead line.
+    """
+    frame_rate = params["video"].get("frame_rate", 30)
+    playhead_position = params["audio_visualization"].get("playhead_position", 0.5)
+    playhead_rgba = tuple(
+        params["audio_visualization"].get("playhead_rgba", [255, 255, 255, 192])
+    )
+
+    playhead_width = params["audio_visualization"].get("playhead_width", 2)
+    image_width, image_height = image_size
+
     # Create a transparent overlay
-    overlay = Image.new("RGBA", image_size, (255, 255, 255, 0))
+    overlay = Image.new("RGBA", image_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
     # Calculate the x position of the playhead line
-    playhead_x = int(playhead_position * image_size[0])
+    playhead_x = int(playhead_position * image_width)
 
     # Draw the semi-transparent playhead line on the overlay
     draw.line(
-        [(playhead_x, 0), (playhead_x, image_size[1])],
-        fill=line_color,
-        width=line_width,
+        [(playhead_x, 0), (playhead_x, image_height)],
+        fill=playhead_rgba,
+        width=playhead_width,
     )
 
-    # Calculate the time at the playhead
+    # Calculate the time at the playhead position
     total_seconds = frame_number / frame_rate
-    hours = math.floor(total_seconds / 3600)
-    minutes = math.floor((total_seconds % 3600) / 60)
-    seconds = math.floor(total_seconds % 60)
-    tenths = int(
-        (total_seconds - math.floor(total_seconds)) * 10
-    )  # Get tenths of a second
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
 
     # Format the time mark as text
-    time_mark = f"{hours:02d}:{minutes:02d}:{seconds:02d}.{tenths}"
+    time_mark = f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}.{int((seconds - int(seconds)) * 10)}"
 
     # Draw the time mark text near the playhead line
-    # Adjust the font size and position as needed
     font = ImageFont.load_default()
-    text_position = (
-        playhead_x + 5,
-        10,
-    )  # Position the text slightly to the right of the playhead line
-    draw.text(text_position, time_mark, fill=line_color, font=font)
+    text_position = (playhead_x + 5, 10)  # Adjust text position as needed
+    draw.text(text_position, time_mark, fill=playhead_rgba, font=font)
 
     return overlay
+
+
+def adjust_spectrogram_for_playhead(
+    params: Params, image: Image.Image, is_first: bool, is_last: bool
+) -> Image.Image:
+    image = image.convert("RGBA")
+    frame_width = params["video"]["width"]
+    playhead_position = params["audio_visualization"].get("playhead_position", 0.5)
+    print(f"playhead : {playhead_position}")
+    playhead_section_rgba = tuple(
+        params["audio_visualization"].get("playhead_section_rgba", [0, 0, 0, 0])
+    )
+    if is_first:
+        lead_in_width = int(frame_width * playhead_position)
+        lead_in_section = Image.new(
+            "RGBA", (lead_in_width, image.height), playhead_section_rgba
+        )
+        print(f"lead in size : {lead_in_section.size}")
+        image = concatenate_images(lead_in_section, image)
+
+    if is_last:
+        play_out_width = int(frame_width * (1 - playhead_position))
+        play_out_section = Image.new(
+            "RGBA", (play_out_width, image.height), playhead_section_rgba
+        )
+        print(f"play out size : {play_out_section.size}")
+        image = concatenate_images(image, play_out_section)
+
+    return image
 
 
 def monitor_memory_usage(interval=1):
@@ -115,176 +180,205 @@ def monitor_memory_usage(interval=1):
         time.sleep(interval)
 
 
-def load_config(config_path):
-    """Load YAML configuration file."""
-    with open(config_path, "r") as file:
-        config = yaml.safe_load(file)
-    return config
+def profile_audio(params: Params) -> dict[str, Any]:
+    """Function to derive the global max power reference from an audio file."""
+    # Initialization and configuration extraction
+    logging.info("Profiling start")
 
+    audio_fsp = params["input"]
+    logging.info(f"Audio file in: {audio_fsp}")
+    target_sr = params["sr"]
+    logging.info(f"Target Sample Rate: {target_sr}")
 
-def calculate_buffer(total_duration, time_per_frame, mel_buffer_multiplier, buffering):
-    # if not buffering, read the whole thing, set the buffer to be big enough
-    if buffering:
-        # the ammount of audio data needed to produce the wide mel buffer
-        audio_buffer = time_per_frame * mel_buffer_multiplier
-        # we add enough to service the sliding window tail
-        extended_audio_buffer = audio_buffer + time_per_frame
-    else:
-        # make the buffer as big as the audio
-        audio_buffer = total_duration
-        extended_audio_buffer = total_duration + time_per_frame
-    return audio_buffer, extended_audio_buffer
+    # Configuration for Mel spectrogram
+    melspec = params.get("mel_spectrogram", {})
 
+    f_low = melspec.get("f_low", 0)
+    f_high = melspec.get("f_high", 22050)
+    hop_length = melspec.get("hop_length", 512)
+    n_fft = melspec.get("n_fft", 2048)
+    n_mels = melspec.get("n_mels", 100)
 
-def tune_buffer(mel_buffer_multiplier, frame_width, width_limit):
-    global max_mem
-    # Calculate the maximum buffer multiplier based on the image width limit
-    max_mel_buffer_multiplier = int(width_limit / frame_width) - 2
+    print(f' f_low : { melspec["f_low"]}')
+    print(f' f_high: { melspec["f_high"]}')
 
-    # Adjust the buffer size based on memory usage
-    if max_mem < 90:
-        adjusted_multiplier = int(mel_buffer_multiplier * 1.5)
-    elif max_mem > 90:  # Memory usage is high, reduce buffer size
-        adjusted_multiplier = int(mel_buffer_multiplier * 0.8)
-    else:
-        adjusted_multiplier = mel_buffer_multiplier
-
-    # Cap the adjusted_multiplier at the max_mel_buffer_multiplier
-    adjusted_multiplier = min(adjusted_multiplier, max_mel_buffer_multiplier)
-
-    # Log the adjusted (and possibly capped) buffer size
-    if adjusted_multiplier != mel_buffer_multiplier:
-        logging.info(f"Adjusted buffer to {adjusted_multiplier}")
-    else:
-        logging.info("Buffer size remains unchanged.")
-
-    # Reset max memory usage after adjustment
-    max_mem = 0
-
-    return adjusted_multiplier
-
-
-def is_max_mel_image_width_safe(total_duration, time_per_frame, frame_width, limit):
-    # we need to know the most audio we might handle
-    max_audio_duration = total_duration + time_per_frame
-
-    # Determine the maximum number of frames needed
-    max_num_frames = (
-        math.ceil(max_audio_duration / time_per_frame) + 1
-    )  # Round up to ensure all audio is covered, include an extra frame for sliding window
-
-    # Calculate the maximum possible wide Mel image width
-    max_wide_mel_image_width = max_num_frames * frame_width
-
-    is_safe = max_wide_mel_image_width <= limit
-    logging.info(f"limit : {limit}")
-    logging.info(f"max_wide_mel_image_width: {max_wide_mel_image_width}")
-    return is_safe, max_wide_mel_image_width  # is safe?
-
-
-def process_audio(config, args):
-    global max_mem, memory_usage
-    # extract the config and argumates to variables.
-    audio_fsp = args.input
-    video_fsp = args.output
-    logging.info(f"Audio file in : {audio_fsp}")
-    logging.info(f"Video file out: {video_fsp}")
-
-    sr = args.sr
-    audio_start = args.start
-    audio_duration = args.duration
-
-    # TODO
-    """ logging.info(f"Audio start offset (secs) : {audio_start}")
-        if audio_duration:
-            logging.info(f"Audio clip duration (secs) : {audio_duration}") """
-
-    if args.maxpower:
-        maxpower = args.maxpower
-    else:
-        maxpower = config.get("mel_spectrogram", {}).get("maxpower", None)
-
-    ##loads the file
-    total_duration = librosa.get_duration(path=audio_fsp)
-    logging.info(f"Total duration (secs): {total_duration}")
-
-    logging.info(f"Resample rate : {sr} hz")
-    logging.info(f"Upper Reference Power : {maxpower}")
-
-    # get the output video paramters from config
-    frame_width = config.get("video", {}).get("width", 800)
-    frame_height = config.get("video", {}).get("height", 200)
-    frame_rate = config.get("video", {}).get("frame_rate", 30)
-    logging.info(
-        f"Output Video : {frame_width}px x {frame_height}px @ {frame_rate}fps "
+    # Load and resample the audio
+    y, sr = load_and_resample_mono(audio_fsp, target_sr)
+    profiling_chunk_duration = params.get("audio_visualization", {}).get(
+        "profiling_chunk_duration", 60
     )
-
-    # get the cofig used to create the mel scale spectrograms
-    #   the color pallate
-    #   https://matplotlib.org/stable/gallery/color/colormap_reference.html
-    colormap = config.get("audio_visualization", {}).get("cmap", "magma")
-    if colormap not in plt.colormaps():
-        logging.warning("'Colormap not found, using 'magma'")
-        colormap = "magma"
-
-    logging.info(f"Spectrogram Pallette : {colormap} ")
-
-    # config for the spectrogram
-    #   time_per_frame, is the duration of aution represented in 1 x frame_width
-    time_per_frame = config["audio_visualization"]["time_per_frame"]
-
-
-    # get the playhead position from config.
-    # 0 is hard left of the frame, 0.5 is centre
-    playhead = config.get("audio_visualization", {}).get("playhead_position", 0.0)
-    lead_in_silence_duration = time_per_frame * playhead
-    tail_silence_duration = time_per_frame * (1 - playhead)
-
-
-    # Maximum allowable image width
-    max_image_width_px = 65536  # Safe limit, matplot or png
-
-    is_safe_size, calculated_size = is_max_mel_image_width_safe(
-        total_duration, time_per_frame, frame_width, max_image_width_px
-    )
-
-    # Check if the maximum possible width exceeds the maximum allowable width
-    if not is_safe_size and not args.buffering:
-        error_message = (
-            f"Error: The maximum possible width of the wide Mel image ({calculated_size} pixels) "
-            f"exceeds the maximum allowable width ({max_image_width_px} pixels). "
-            "Please consider reducing the audio length or using buffering."
+    samples_per_chunk = int(sr * profiling_chunk_duration)
+    global_max_power = 0
+    # Process each chunk
+    for i in tqdm(range(0, len(y), samples_per_chunk)):
+        y_chunk = y[i : i + samples_per_chunk]
+        S = librosa.feature.melspectrogram(
+            y=y_chunk,
+            sr=sr,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            n_mels=n_mels,
+            fmin=f_low,
+            fmax=f_high,
         )
-        logging.error(error_message)
-        raise ValueError(error_message)
+        maxpower = np.max(S)
+        print(f"profiling chunk max power : {maxpower}")
+        if maxpower > global_max_power:
+            global_max_power = maxpower
 
-    #   a multiplyer  that determines how much audio to process each cycle
-    #   smaller numbers will take longer, higher numbers will use a lot of memory
-    #   1 minute displayed in a frame x 20 = 20 minutes of audio processed
-    mel_buffer_multiplier = config["audio_visualization"]["mel_buffer_multiplier"]
+    return {
+        "max_power": float(global_max_power),
+        "sample_count": len(y),
+        "sample_rate": sr,
+    }
 
-    audio_buffer, extended_audio_buffer = calculate_buffer(
-        total_duration, time_per_frame, mel_buffer_multiplier, args.buffering
-    )
 
-    logging.info(f"Full frame duration : {time_per_frame} secs")
-    logging.info(f"Audio Buffer     : {audio_buffer} secs")
-    logging.info(f"Audio Buffer ext : {extended_audio_buffer} secs")
+def generate_spectrograms(
+    params: Params,
+    project: Params,
+) -> bool:
+    """Function processes the audio, creates a series of wide Mel spectrogram PNG files."""
+    logging.info("Spectrogram generation start")
+    images_metadata = []  # each image will have an entry with it's metadata
+    audio_metadata = project["audio_metadata"]
+    max_power = audio_metadata.get("max_power")
+    audio_fsp = audio_metadata["source_audio_path"]
+    video = params.get("video", {})
+    audiovis = params.get("audio_visualization", {})
 
-    # https://librosa.org/doc/latest/generated/librosa.feature.melspectrogram.html
-    f_low = config.get("mel_spectrogram", {}).get("f_low", 0)
-    f_high = config.get("mel_spectrogram", {}).get("f_high", None)
-    hop_length = config.get("mel_spectrogram", {}).get("hop_length", 512)
-    n_ftt = config.get("mel_spectrogram", {}).get("n_fft", 2048)
-    db_low = config.get("mel_spectrogram", {}).get("db_low", 60)
-    db_high = config.get("mel_spectrogram", {}).get("db_high", 0)
+    melspec = params.get("mel_spectrogram", {})
+    f_low = melspec.get("f_low", 0)
+    f_high = melspec.get("f_high", 22050)
+    hop_length = melspec.get("hop_length", 512)
+    n_fft = melspec.get("n_fft", 2048)
+    n_mels = melspec.get("n_mels", 100)
+    db_low = melspec.get("db_low", -70)
+    db_high = melspec.get("db_high", 0)
 
-    logging.info(f"Frequency range : {f_low} to {f_high} Hz")
-    logging.info(f"db range : {db_low} to {db_high} dB")
-    logging.info(f"n_fft : {n_ftt}")
-    logging.info(f"hop length : {hop_length}")
+    max_spectrogram_width = audiovis.get("max_spectrogram_width", 1000)
+    logging.info(f"max_spectrogram_width: {max_spectrogram_width}")
 
-    ffmpeg_cmd_cpu = [
+    target_sample_rate = params["sr"]
+
+    samples_per_pixel = (audiovis["seconds_in_view"] * target_sample_rate) / video[
+        "width"
+    ]
+    y_chunk_samples = int(samples_per_pixel * max_spectrogram_width)
+    logging.info(f"y_chunk_samples: {y_chunk_samples}")
+
+    full_chunk_duration_secs = y_chunk_samples / target_sample_rate
+
+    total_duration_secs = librosa.get_duration(path=audio_fsp, sr=target_sample_rate)
+
+    current_position_secs = 0
+
+    count = 0
+    progress_bar = tqdm(total=total_duration_secs)
+    while current_position_secs < total_duration_secs:
+        # print(f'{current_position_secs} / {total_duration_secs}')
+
+        duration_secs = min(
+            y_chunk_samples / target_sample_rate,
+            total_duration_secs - current_position_secs,
+        )
+
+        y, sr = librosa.load(
+            audio_fsp,
+            sr=target_sample_rate,
+            offset=current_position_secs,
+            duration=duration_secs,
+        )
+
+        S = librosa.feature.melspectrogram(
+            y=y,
+            sr=sr,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            n_mels=n_mels,
+            fmin=f_low,
+            fmax=f_high,
+        )
+
+        # print(f'max power : { max_power }')
+        # print(f' db_low : { db_low }')
+        # print(f' db_high: { db_high }')
+        # print(f' f_low : { f_low }')
+        # print(f' f_high: { f_high }')
+
+        S_dB = librosa.power_to_db(
+            S,
+            ref=max_power,
+            amin=10 ** (db_low / 10.0),
+            top_db=db_high - db_low,
+        )
+
+        if (
+            duration_secs < full_chunk_duration_secs
+        ):  # Adjust for potentially shorter last chunk
+            image_width = int(
+                max_spectrogram_width * (duration_secs / full_chunk_duration_secs)
+            )
+        else:
+            image_width = max_spectrogram_width
+
+        plt.figure(figsize=(image_width / 100, video.get("height", 100) / 100))
+        librosa.display.specshow(
+            S_dB,
+            sr=sr,
+            cmap=audiovis.get("cmap", "magma"),
+            hop_length=hop_length,
+            fmin=f_low,
+            fmax=f_high,
+        )
+        plt.axis("off")
+        plt.tight_layout(pad=0)
+
+        basename = Path(audio_metadata["source_audio_path"]).stem
+        image_filename = f"{basename}-{count:04d}.png"
+        image_path = Path(project["project_path"]) / image_filename
+
+        if allow_save(image_path, params.get("overwrite", None)):
+            plt.savefig(
+                image_path,
+                bbox_inches="tight",
+                pad_inches=0,
+            )
+        plt.close()
+
+        # Save spectrogram and update project data with image metadata
+        # For each generated image, create its metadata entry
+        image_metadata = {
+            "filename": image_filename,
+            "start_time": current_position_secs,
+            "end_time": current_position_secs + duration_secs,
+            # Additional metadata can be included here
+        }
+        # Append this metadata to the project data
+        # Consider creating a function similar to update_project_data to handle this update
+        images_metadata.append(image_metadata)
+
+        current_position_secs += duration_secs
+        progress_bar.update(duration_secs)
+        count += 1
+    progress_bar.close()
+    project["images_metadata"] = images_metadata
+    print(project)
+    project.save_to_json(project["project_file"])
+
+    return True
+
+
+def get_ffmpeg_cmd(params: Params, project: Params) -> List[str]:
+    # localise some variable we will use frequently
+    video_fsp = Path(project["project_path"]) / params["output"]
+    print(video_fsp)
+
+    # geometry of resulting mp4
+    frame_width: Final[int] = params["video"].get("width", 800)
+    frame_height: Final[int] = params["video"].get("height", 200)
+    frame_rate: Final[int] = params["video"].get("frame_rate", 30)
+
+    ffmpeg_cmd_cpu: List[str] = [
         "ffmpeg",
         "-y",
         "-f",
@@ -311,7 +405,7 @@ def process_audio(config, args):
     ]
 
     ### Start the ffmpeg process
-    ffmpeg_cmd_gpu = [
+    ffmpeg_cmd_gpu: List[str] = [
         "ffmpeg",
         "-y",
         "-f",
@@ -338,214 +432,158 @@ def process_audio(config, args):
     ]
 
     ffmpeg_cmd = ffmpeg_cmd_gpu
-    if args.cpu:
+    if params.get("cpu", None):
         ffmpeg_cmd = ffmpeg_cmd_cpu
 
-    with open("ffmpeg_log.txt", "wb") as log_file:
-        ffmpeg_process = subprocess.Popen(
+    return ffmpeg_cmd
+
+
+def render_project_to_mp4(params: Params, project: Params) -> bool:
+    """Function to produce MP$ video from a spectrogram
+
+    This approach uses a sliding window crop to sample the spectrogram images, and feed to ffmpeg to encode.
+
+    """
+    logging.info("MP4 Encoding start")
+    # localise some variable we will use frequently
+    video_fsp = Path(project["project_path"]) / params["output"]
+    print(video_fsp)
+
+    # geometry of resulting mp4
+    frame_width: Final[int] = params["video"].get("width", 800)
+    frame_height: Final[int] = params["video"].get("height", 200)
+    frame_rate: Final[int] = params["video"].get("frame_rate", 30)
+
+    print(f"frame_height: {frame_height}")
+    print(f"frame_width: {frame_width}")
+
+    playhead_position: Final = params["audio_visualization"].get(
+        "playhead_position", {}
+    )
+    seconds_in_view: Final = params["audio_visualization"]["seconds_in_view"]
+
+    # get the ffmpeg command line parameter for gpu, or cpu
+    ffmpeg_cmd = get_ffmpeg_cmd(params, project)
+    print(ffmpeg_cmd)
+
+    # create the encoder pipe so we can stream the frames
+    with open(Path(project["project_path"]) / "ffmpeg_log.txt", "wb") as log_file:
+        ffmpeg_process: subprocess.Popen = subprocess.Popen(
             ffmpeg_cmd, stdin=subprocess.PIPE, stdout=log_file, stderr=subprocess.STDOUT
         )
 
-    ##### start work
-    current_position_secs = 0
-    total_frames_rendered = 0
+    ## Image Loop
+    # Cycle through each image described by the project
 
-    # the while loop is focussed on the actual audio durations, not silence padding
-    while current_position_secs < total_duration:
-        logging.info(f"Starting Chunk")
-        logging.critical(f"current_position = {current_position_secs}")
-        ## check if this is the last chunk
-        is_last_chunk = (current_position_secs + audio_buffer) >= total_duration
+    # counthe images in the metadata
+    total_images = len(project.get("images_metadata", []))
 
-        if is_last_chunk:
-            # Calculate the duration of tail silence based on the playhead position
-            tail_silence_duration = time_per_frame * (1 - playhead)
+    # setup a global counmt, we use this to calculate time in overlay
+    global_frame_count = 0
 
-            # Adjust remaining_duration to include the actual audio left plus the tail silence
-            remaining_duration = total_duration - current_position_secs + tail_silence_duration
+    # step through each spectrograph image
+    for i in range(total_images):
+        # first and last may need treatment
+        is_first = True if i == 0 else False
+        is_last = True if i == total_images - 1 else False
 
-            # Since this is the last chunk, the audio buffer needs to accommodate the remaining audio plus the tail silence
-            audio_buffer = remaining_duration
+        print(f"Image number {i+1} of {total_images}")
+        image_metadata = project["images_metadata"][i]
+        filename = image_metadata["filename"]
+        print(filename)
+        start_time = image_metadata["start_time"]
+        end_time = image_metadata["end_time"]
 
-            # No next chunk to interleave with, so extended_audio_buffer is set equal to audio_buffer
-            extended_audio_buffer = audio_buffer
+        # duration of audio the spectrogram image represents
+        image_duration = end_time - start_time
+        print(f"image_duration : {image_duration}")
 
-            # Convert the duration of silence into a corresponding image width
-            # This assumes a linear relationship between time and image width as used in the rest of the video
-            silence_image_width = int(frame_width * (tail_silence_duration / time_per_frame))
+        # retrieve the image
+        spectrogram_image = Image.open(Path(project["project_path"]) / filename)
 
-            # Now adjust the calculation of wide_mel_image_width for the last chunk to include the visual silence
-            proportion_of_full_chunk = remaining_duration / (time_per_frame * mel_buffer_multiplier)
-            wide_mel_image_width = int((frame_width * mel_buffer_multiplier) * proportion_of_full_chunk)
+        work_image = spectrogram_image
 
-            # Append the visual silence to the wide Mel image width
-            wide_mel_image_width += silence_image_width
-
-
-        # Load audio segment
-        logging.info("Loading audio segment")
-        start_time = time.time()
-        y, sr = librosa.load(
-            audio_fsp,
-            sr=sr,
-            offset=current_position_secs,
-            duration=extended_audio_buffer,
-        )
-        logging.info(f"Processing time: {(time.time() - start_time):.2f} seconds")
-
-        # prepend an offset to position the readhead to centre
-        # first chunk only
-        # playhead positioning
-        if current_position_secs == 0:
-            silence = np.zeros(int(sr * lead_in_silence_duration))
-            logging.warning(
-                f"playhead leadin duration : {len(silence)} samples, {len(silence)/sr} secs"
-            )
-            y = np.concatenate((silence, y))
-
-
-        if is_last_chunk:
-            silence = np.zeros(int(sr * tail_silence_duration))
-            logging.warning(
-                f"playhead playout duration : {len(silence)} samples, {len(silence)/sr} secs"
-            )
-            y = np.concatenate((y,silence))
-
-
-        logging.info("Calculate mel data")
-        start_time = time.time()
-        # calculate the mel data
-        S = librosa.feature.melspectrogram(
-            y=y,
-            sr=sr,
-            n_fft=n_ftt,
-            hop_length=hop_length,
-            n_mels=frame_height,
-            fmin=f_low,
-            fmax=f_high,
-        )
-        print(f"Current memory usage: {max_mem}")
-
-        logging.info(f"Processing time: {(time.time() - start_time):.2f} seconds")
-
-        if maxpower:
-            S_dB = librosa.power_to_db(
-                S, ref=maxpower, amin=np.exp(db_low / 10.0), top_db=db_high - db_low
-            )
-        else:
-            S_dB = librosa.power_to_db(
-                S, ref=np.max, amin=10 ** (db_low / 10.0), top_db=db_high - db_low
+        # add overlay to the image and add a lead in if #1
+        if params["audio_visualization"].get("playhead_position", None):
+            work_image = adjust_spectrogram_for_playhead(
+                params, spectrogram_image, is_first, is_last
             )
 
-        logging.info(f"Upper power : {np.max(S)}")
+        # the number of frame we need to render the spectrograms
+        num_frames = int(image_duration * frame_rate)
 
-        # Calculate the width of the spectrogram image based on the scaling_factor
+        # number of pixels to slide for each frame
+        step_px = spectrogram_image.width / num_frames
+        print(f"step_px : {step_px}")
 
-        if is_last_chunk:
-            # Calculate the proportion of the last chunk relative to a full audio_buffer duration
-            proportion_of_full_chunk = remaining_duration / (
-                time_per_frame * mel_buffer_multiplier
-            )
-            # Apply this proportion to the base wide mel image width calculation
-            wide_mel_image_width = int(
-                (frame_width * mel_buffer_multiplier) * proportion_of_full_chunk
-            )
-        else:
-            wide_mel_image_width = (frame_width * mel_buffer_multiplier) + frame_width
+        # calculate how much time is used for the lead-in
+        lead_in_duration = seconds_in_view * playhead_position
+        print(f"lead in duration : {lead_in_duration}")
+        lead_in_frames = int((lead_in_duration) * frame_rate)
+        if is_first:
+            num_frames += lead_in_frames
+            print(f"lead in frames : {lead_in_frames}")
 
-        # Plotting the spectrogram without any axes or labels
-        plt.figure(figsize=(wide_mel_image_width / 100, frame_height / 100))
+        if is_last:
+            num_frames -= lead_in_frames
+            print(f"lead in frames : {lead_in_frames}")
 
-        # Measure processing time for mel spectrogram calculation
-        # cmap=custom_cmap,
-        logging.info("Render wide mel")
-        start_time = time.time()
-        librosa.display.specshow(
-            S_dB, sr=sr, cmap=colormap, hop_length=hop_length, fmin=f_low, fmax=f_high
-        )
-        plt.axis("off")
-        plt.tight_layout(pad=0)
-        plt.savefig("wide_mel_spectrogram.png", bbox_inches="tight", pad_inches=0)
-        plt.close()
-        processing_time = time.time() - start_time
-        print(f"Processing time : {processing_time:.2f} seconds")
+        print(f"num_frames: {num_frames}")
 
-        # slice the image
-        # Load the wide mel image using PIL
-        wide_mel_image = Image.open("wide_mel_spectrogram.png")
+        # check
+        # work_image.save(Path(project["project_path"] / f"adjusted-{filename}"))
 
-        logging.info(f"audio buffer duration: {audio_buffer} secs")
-        num_frames = int(audio_buffer * frame_rate)
-        logging.info(f"Number of frames in cycle : {num_frames}")
+        # extend the image to cover the join
+        if i < total_images - 1:
+            next_image_metadata = project["images_metadata"][i + 1]
+            next_filename = next_image_metadata["filename"]
+            next_image = Image.open(Path(project["project_path"]) / next_filename)
+            # Assume frame_width is the width of the frame to append from the next image
+            next_image_section = next_image.crop((0, 0, frame_width, frame_height))
+            work_image = concatenate_images(work_image, next_image_section)
 
-        # Get the width of the image
-        image_width = (
-            wide_mel_image.width - frame_width
-        )  # don;t include the extended buffer
-        logging.info(f"adjusted image width : {image_width}")
-
-        step_px = image_width / num_frames  # number of pixels to slide for each frame
-        logging.info(f"Pixel Step for frame : {step_px}")
-        # Iterate through the wide mel image to create individual frames
         for i in range(num_frames):
-            # Calculate the start and end positions for slicing
-            # print(f'frame {i} of {num_frames}')
-            start_pos = i * step_px
-            end_pos = start_pos + frame_width
+            global_frame_count += 1
+            crop_start_x = int(i * step_px)
+            crop_end_x = int(crop_start_x + frame_width)
 
-            # Slice the wide mel image to extract the frame
-            frame_image = wide_mel_image.crop((start_pos, 0, end_pos, frame_height))
-
-            playhead_overlay = create_playhead_overlay(
-                total_frames_rendered + 1,
-                frame_rate,
-                [frame_width, frame_height],
-                playhead,
-                (128, 128, 128, 64),
-                5,
+            cropped_frame = work_image.crop((crop_start_x, 0, crop_end_x, frame_height))
+            cropped_frame_rgba = cropped_frame.convert("RGBA")
+            ### Insert frame overlays
+            playhead_overlay_rgba = create_playhead_overlay(
+                params, global_frame_count, cropped_frame_rgba.size
             )
 
-            combined_image = Image.alpha_composite(frame_image, playhead_overlay)
-
+            final_frame = Image.alpha_composite(
+                cropped_frame_rgba, playhead_overlay_rgba
+            )
             # Convert the image to bytes
-            cropped_frame_rgb = combined_image.convert("RGB")
-            cropped_frame_bytes = cropped_frame_rgb.tobytes()
+            final_frame_rgb = final_frame.convert("RGB")
+            final_frame_bytes = final_frame_rgb.tobytes()
 
             # Write the frame bytes to ffmpeg's stdin
-            ffmpeg_process.stdin.write(cropped_frame_bytes)
-            total_frames_rendered += 1
-
-            if current_position_secs == 0 and i == 0:
-                # Save the frame as an image file (adjust the filename as needed)
-                frame_image.save(f"frame_{i}.png")
-                print("-------------------------------------SAVE")
-
-        # increment chunk
-
-        if current_position_secs == 0:  # first chunk
-            current_position_secs += audio_buffer - (
-                time_per_frame * playhead
-            )  # account for offset silence
-        else:
-            current_position_secs += audio_buffer
-        logging.critical(f"current_position = {current_position_secs}")
-
-        if args.buffering:
-            mel_buffer_multiplier = tune_buffer(
-                mel_buffer_multiplier, frame_width, max_image_width_px
-            )
-
-        # reset audio buffer sizes
-        audio_buffer, extended_audio_buffer = calculate_buffer(
-            total_duration, time_per_frame, mel_buffer_multiplier, args.buffering
-        )
+            if ffmpeg_process.stdin is not None:
+                ffmpeg_process.stdin.write(final_frame_bytes)
 
     # Close ffmpeg's stdin to signal end of input
-    ffmpeg_process.stdin.close()
+    # ffmpeg_process.wait()
+    if ffmpeg_process.stdin is not None:
+        ffmpeg_process.stdin.close()
 
-    # Wait for ffmpeg to finish encoding
-    ffmpeg_process.wait()
-    logging.info(f"Total frames rendered : {total_frames_rendered}")
+    return True
+
+
+def concatenate_images(image1, image2):
+    """Concatenate image2 to the right side of image1, ensuring both are RGBA."""
+    # Ensure both images are in RGBA mode
+    image1 = image1.convert("RGBA")
+    image2 = image2.convert("RGBA")
+
+    new_width = image1.width + image2.width
+    new_img = Image.new("RGBA", (new_width, image1.height))
+    new_img.paste(image1, (0, 0), image1)
+    new_img.paste(image2, (image1.width, 0), image2)
+    return new_img
 
 
 def main():
@@ -559,46 +597,39 @@ def main():
     parser = argparse.ArgumentParser(
         description="Generate a scrolling spectrogram video from an audio file."
     )
+
     parser.add_argument(
         "-c", "--config", required=True, help="Configuration file path."
     )
+
     parser.add_argument(
         "--start",
         help="Audio start time in seconds. Default: 0.",
         type=float,
         default=0,
     )
+
     parser.add_argument(
         "--duration",
         help="Audio clip duration in seconds. Processes till end if unspecified.",
         type=float,
     )
+
     parser.add_argument(
         "--sr",
-        help="Audio sample rate. Overrides default (22050 Hz).",
+        help="Audio sample rate. Overrides the source sample rate.",
         type=int,
-        default=22050,
-    )
-    parser.add_argument(
-        "--maxpower",
-        help="Custom upper reference power for normalization, affecting spectrogram sensitivity. Overrides all auto-calculation.",
-        type=float,
     )
 
     parser.add_argument(
         "--cpu",
         help="use CPU for processing if GPU is not available.",
         action="store_true",
-        default=False,
-    )
-    parser.add_argument(
-        "--buffering",
-        help="Use buffering, to split the processing - for large files.",
-        action="store_true",
-        default=False,
+        default=None,
     )
 
     parser.add_argument("-in", "--input", required=True, help="Input audio file path.")
+
     parser.add_argument(
         "-out",
         "--output",
@@ -607,11 +638,93 @@ def main():
         default="output.mp4",
     )
 
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        default=None,
+    )
+
+    parser.add_argument(
+        "-p",
+        "--path",
+        help="Path to project folder, if ommited, current folder will be used.",
+        default=None,
+    )
+
     args = parser.parse_args()
+    params = Params(args.config, args=args, file_type="yaml")
 
-    config = load_config(args.config)
+    # resolve all paths and check as needed
+    config_path = Path(args.config).resolve()
+    if not config_path.exists():
+        logging.error(f"Config does not exist : {config_path}")
+        sys.exit()
+    else:
+        print(f"Config file : {config_path}")
 
-    process_audio(config, args)
+    source_audio_path = Path(args.input).resolve()
+    if not source_audio_path.exists():
+        logging.error(f"Input does not exist : {source_audio_path}")
+        sys.exit()
+    else:
+        print(f"Source Audio Path : {source_audio_path}")
+
+    # the mp4 file - will be tested later and overwriten if needed
+    output_path = Path(args.output).resolve()
+
+    print(params)
+
+    if args.path:
+        project_path = Path(args.path).resolve()
+        if not project_path.exists():
+            logging.error(f"Project folder does not exist : {project_path}")
+            sys.exit()
+    else:
+        project_path = Path.cwd().resolve()
+    print(f"Project path : {project_path}")
+
+    project_json_path = Path(project_path) / "project.json"
+    print(f"Project file : {project_json_path}")
+    print(project_json_path)
+
+    if project_json_path.exists():
+        print("Using existing project file")
+        project = Params(file_path=project_json_path, file_type="json")
+        print(project)
+    else:
+        default_project_structure = {
+            "project_path": str(project_path),
+            "project_file": str(project_json_path),
+            "audio_metadata": {
+                "source_audio_path": str(source_audio_path),
+                "max_power": None,
+                "sample_rate": None,
+                "sample_count": None,
+            },
+            "images_metadata": [],
+        }
+        project = Params(default_config=default_project_structure)
+
+    project["audio_metadata"]["source_audio_path"] = str(source_audio_path)
+
+    maxpower = project["audio_metadata"].get("max_power", None)
+    sample_rate = project["audio_metadata"].get("sample_rate", None)
+    sample_count = project["audio_metadata"].get("sample_count", None)
+    if any(value is None for value in [maxpower, sample_rate, sample_count]):
+        # This block executes if any of maxpower, sample_rate, or sample_count is None
+        profile = profile_audio(params)  #
+        print(f"Profile : {profile}")
+        project["audio_metadata"].update(profile)
+
+    project.save_to_json(str(project_json_path))
+    print(f"project data : {project}")
+    ### PASS 2
+    # Generate the spectrograms
+    generate_spectrograms(params, project)
+
+    render_project_to_mp4(params, project)
+
+    # process_audio(config, args)
 
 
 if __name__ == "__main__":
