@@ -104,13 +104,13 @@ def create_playhead_overlay(
     frame_rate = params["video"].get("frame_rate", 30)
     playhead_position = params["audio_visualization"].get("playhead_position", 0.5)
     playhead_rgba = tuple(
-        params["audio_visualization"].get("playhead_grba", [255, 255, 255, 192])
+        params["audio_visualization"].get("playhead_rgba", [255, 255, 255, 192])
     )
     playhead_width = params["audio_visualization"].get("playhead_width", 2)
     image_width, image_height = image_size
 
     # Create a transparent overlay
-    overlay = Image.new("RGBA", image_size, playhead_rgba)
+    overlay = Image.new("RGBA", image_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
     # Calculate the x position of the playhead line
@@ -132,9 +132,7 @@ def create_playhead_overlay(
     time_mark = f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}.{int((seconds - int(seconds)) * 10)}"
 
     # Draw the time mark text near the playhead line
-    font = (
-        ImageFont.load_default()
-    )  # Consider using a custom font for better visibility
+    font = ImageFont.load_default()
     text_position = (playhead_x + 5, 10)  # Adjust text position as needed
     draw.text(text_position, time_mark, fill=playhead_rgba, font=font)
 
@@ -148,14 +146,13 @@ def adjust_spectrogram_for_playhead(
     frame_width = params["video"]["width"]
     playhead_position = params["audio_visualization"].get("playhead_position", 0.5)
     print(f"playhead : {playhead_position}")
-    section_opacity = params["audio_visualization"].get(
-        "section_opacity", 128
-    )  # Semi-transparent by default
-
+    playhead_section_rgba = tuple(
+        params["audio_visualization"].get("playhead_section_rgba", [0, 0, 0, 0])
+    )
     if is_first:
         lead_in_width = int(frame_width * playhead_position)
         lead_in_section = Image.new(
-            "RGBA", (lead_in_width, image.height), (0, 0, 255, section_opacity)
+            "RGBA", (lead_in_width, image.height), playhead_section_rgba
         )
         print(f"lead in size : {lead_in_section.size}")
         image = concatenate_images(lead_in_section, image)
@@ -163,7 +160,7 @@ def adjust_spectrogram_for_playhead(
     if is_last:
         play_out_width = int(frame_width * (1 - playhead_position))
         play_out_section = Image.new(
-            "RGBA", (play_out_width, image.height), (255, 0, 0, section_opacity)
+            "RGBA", (play_out_width, image.height), playhead_section_rgba
         )
         print(f"play out size : {play_out_section.size}")
         image = concatenate_images(image, play_out_section)
@@ -650,7 +647,6 @@ def main():
         "-p",
         "--path",
         help="Path to project folder, if ommited, current folder will be used.",
-        action="store_true",
         default=None,
     )
 
