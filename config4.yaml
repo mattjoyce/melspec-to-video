@@ -11,12 +11,17 @@ audio_visualization:
 mel_spectrogram:
   db_high: 0
   db_low: -70
-  f_high: 22050
+  f_high: 10000
   f_low: 50
   hop_length: 512
   n_fft: 2048
-  n_mels: 200
+  n_mels: 400
 video:
   frame_rate: 30
   height: 200
   width: 800
+overlays:
+  frequency_axis:
+      freq_hz : [100, 1000, 3000, 5000, 8000]
+      axis_position: 0.25  # Centered horizontally
+      axis_rgba: [255,255,255,192] # white, slightly transparent

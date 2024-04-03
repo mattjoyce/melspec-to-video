@@ -558,12 +558,12 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
                 cropped_frame_rgba, playhead_overlay_rgba
             )
 
-            axis_overlay = create_vertical_axis(
-                params,
-                params["audio_visualization"].get("playhead_position", 0.5),
-                [100, 1000, 3000, 5000, 9000],
-                cropped_frame_rgba.size,
-            )
+            axis = params.get("overlays", {}).get("frequency_axis", None)
+            if axis:
+                axis_overlay = create_vertical_axis(
+                    params,
+                    cropped_frame_rgba.size,
+                )
 
             final_frame = Image.alpha_composite(final_frame, axis_overlay)
 
@@ -635,8 +635,6 @@ def calculate_frequency_positions(f_low, f_high, freqs_of_interest, img_height):
 
 def create_vertical_axis(
     params: Params,
-    xpospc: float,
-    freqs_of_interest: List[int],
     image_size,
 ):
     """
@@ -654,7 +652,9 @@ def create_vertical_axis(
 
     # localise some variables
     width, height = image_size
-    xpos = width * xpospc
+    axis = params.get("overlays", {}).get("frequency_axis")
+    x_pos = width * axis["axis_position"]
+    ink_color = tuple(axis["axis_rgba"])
     melspec = params["mel_spectrogram"]
 
     # Create a transparent image
@@ -662,11 +662,11 @@ def create_vertical_axis(
     draw = ImageDraw.Draw(axis_image)
 
     # Draw the vertical axis line
-    draw.line([(xpos, 0), (xpos, height)], fill="white", width=1)
+    draw.line([(x_pos, 0), (x_pos, height)], fill=ink_color, width=1)
 
     # Calculate the positions for the frequency labels
     pos_freq_pairs = calculate_frequency_positions(
-        melspec["f_low"], melspec["f_high"], freqs_of_interest, height
+        melspec["f_low"], melspec["f_high"], axis["freq_hz"], height
     )
 
     font = ImageFont.load_default()
@@ -678,12 +678,12 @@ def create_vertical_axis(
         text_size_x = right - left
 
         # Draw tick mark
-        draw.line([(xpos, pos), (xpos - 5, pos)], fill="white", width=1)
+        draw.line([(x_pos, pos), (x_pos - 5, pos)], fill=ink_color, width=1)
         # Draw label
         draw.text(
-            (xpos - text_size_x - 10, pos + (text_size_y // 2)),
+            (x_pos - text_size_x - 10, pos + (text_size_y // 2)),
             label,
-            fill="white",
+            fill=ink_color,
             font=font,
         )
     return axis_image
