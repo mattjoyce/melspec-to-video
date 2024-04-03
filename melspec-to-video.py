@@ -557,6 +557,16 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
             final_frame = Image.alpha_composite(
                 cropped_frame_rgba, playhead_overlay_rgba
             )
+
+            axis_overlay = create_vertical_axis(
+                params,
+                params["audio_visualization"].get("playhead_position", 0.5),
+                [100, 1000, 3000, 5000, 9000],
+                cropped_frame_rgba.size,
+            )
+
+            final_frame = Image.alpha_composite(final_frame, axis_overlay)
+
             # Convert the image to bytes
             final_frame_rgb = final_frame.convert("RGB")
             final_frame_bytes = final_frame_rgb.tobytes()
@@ -586,6 +596,99 @@ def concatenate_images(image1, image2):
     return new_img
 
 
+def calculate_frequency_positions(f_low, f_high, freqs_of_interest, img_height):
+    """
+    Calculate the vertical positions of given frequencies on a mel spectrogram image and returns
+    them along with the corresponding frequency if they fall within the image height.
+
+    Parameters:
+    - f_low: The lowest frequency in Hz included in the spectrogram.
+    - f_high: The highest frequency in Hz included in the spectrogram.
+    - freqs_of_interest: A list of frequencies in Hz for which to calculate positions.
+    - img_height: The height of the spectrogram image in pixels.
+
+    Returns:
+    - A list of tuples (y_position, frequency) for frequencies within the image height.
+    """
+    # Convert frequency bounds and frequencies of interest to the mel scale
+    mel_low = librosa.hz_to_mel(f_low)
+    mel_high = librosa.hz_to_mel(f_high)
+    mels_of_interest = librosa.hz_to_mel(freqs_of_interest)
+
+    # Calculate the relative position of each frequency of interest within the mel range
+    relative_positions = (mels_of_interest - mel_low) / (mel_high - mel_low)
+
+    # Convert these positions to percentages of the spectrogram height
+    y_positions = (1 - relative_positions) * img_height
+
+    # Pair positions with frequencies, exclude out-of-bounds, and return as list of tuples
+    pos_freq_pairs = [
+        (pos, freq)
+        for pos, freq, rel_pos in zip(
+            y_positions, freqs_of_interest, relative_positions
+        )
+        if 0 <= rel_pos <= 1
+    ]
+
+    return pos_freq_pairs
+
+
+def create_vertical_axis(
+    params: Params,
+    xpospc: float,
+    freqs_of_interest: List[int],
+    image_size,
+):
+    """
+    Generates a transparent image with a vertical frequency axis.
+
+    Parameters:
+    - xpos: The x-position (in pixels) for the vertical axis line.
+    - f_low, f_high: Frequency range (in Hz) for the axis.
+    - freqs_of_interest: A list of frequencies (in Hz) where ticks and labels will be placed.
+    - img_height, image_width: Dimensions of the output image.
+
+    Returns:
+    - A PIL Image object with the specified vertical frequency axis.
+    """
+
+    # localise some variables
+    width, height = image_size
+    xpos = width * xpospc
+    melspec = params["mel_spectrogram"]
+
+    # Create a transparent image
+    axis_image = Image.new("RGBA", (width, height), (255, 0, 0, 0))
+    draw = ImageDraw.Draw(axis_image)
+
+    # Draw the vertical axis line
+    draw.line([(xpos, 0), (xpos, height)], fill="white", width=1)
+
+    # Calculate the positions for the frequency labels
+    pos_freq_pairs = calculate_frequency_positions(
+        melspec["f_low"], melspec["f_high"], freqs_of_interest, height
+    )
+
+    font = ImageFont.load_default()
+    # Draw ticks and labels for each frequency of interest
+    for pos, freq in pos_freq_pairs:
+        label = f"{freq}Hz"
+        left, top, right, bottom = font.getbbox(text=label)
+        text_size_y = top - bottom
+        text_size_x = right - left
+
+        # Draw tick mark
+        draw.line([(xpos, pos), (xpos - 5, pos)], fill="white", width=1)
+        # Draw label
+        draw.text(
+            (xpos - text_size_x - 10, pos + (text_size_y // 2)),
+            label,
+            fill="white",
+            font=font,
+        )
+    return axis_image
+
+
 def main():
 
     # Start the memory monitoring thread
@@ -602,18 +705,27 @@ def main():
         "-c", "--config", required=True, help="Configuration file path."
     )
 
-    parser.add_argument(
-        "--start",
-        help="Audio start time in seconds. Default: 0.",
-        type=float,
-        default=0,
-    )
+    # TODO #2
+    # parser.add_argument(
+    #     "--start",
+    #     help="Audio start time in seconds. Default: 0.",
+    #     type=float,
+    #     default=0,
+    # )
 
-    parser.add_argument(
-        "--duration",
-        help="Audio clip duration in seconds. Processes till end if unspecified.",
-        type=float,
-    )
+    # parser.add_argument(
+    #     "--duration",
+    #     help="Audio clip duration in seconds. Processes till end if unspecified.",
+    #     type=float,
+    # )
+
+    # TODO #3
+    # parser.add_argument(
+    #     "--encodeaudio",
+    #     help="add the audio to the MP4",
+    #     action="store_true",
+    #     default=None,
+    # )
 
     parser.add_argument(
         "--sr",
