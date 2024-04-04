@@ -12,7 +12,6 @@ import librosa.display
 import matplotlib.pyplot as plt
 import numpy as np
 import psutil
-import soundfile as sf
 from PIL import Image, ImageDraw, ImageFont
 from tqdm import tqdm
 
@@ -74,17 +73,40 @@ def allow_save(fullfilepath: Path, allowoverwrite: bool) -> bool:
     return False  # This line is technically redundant due to the sys.exit above
 
 
-def load_and_resample_mono(audio_path, target_sr=22050):
-    # Load and resample audio file
-    data, samplerate = sf.read(audio_path)
+def load_and_resample_mono(params: Params) -> Tuple[np.ndarray, int]:
+    """
+    Load a segment of an audio file, resample it to a specified sample rate, and ensure it is mono.
 
-    # if there are multiple dimensions, it's not mono, avarage them
-    if data.ndim > 1:
-        logging.info(f"Converting to mono")
-        data = np.mean(data, axis=1)  # Convert to mono
+    This function uses the librosa library to load and resample audio. It allows for specifying
+    a start time and duration for loading only a part of the audio file, which is useful for large files
+    or specific analysis of audio segments.
 
-    data_resampled = librosa.resample(data, orig_sr=samplerate, target_sr=target_sr)
-    return data_resampled, target_sr
+    Parameters:
+    - params (Params): Configuration parameters containing the audio file path, sample rate,
+                       start time, and duration for the segment to be loaded and resampled.
+
+    Returns:
+    - Tuple[np.ndarray, int]: A tuple containing the audio data as a numpy array and the sample rate as an integer.
+    """
+    # Extract necessary parameters
+    start_time = params.get("start_time", 0)
+    duration = params.get("duration", None)
+    audio_fsp = params["input"]
+    sample_rate = params["sr"]
+
+    # Determine the total duration of the audio file if duration is not explicitly provided
+    if duration is None:
+        total_duration = librosa.get_duration(path=audio_fsp)
+        duration = total_duration - start_time
+        # Ensure that the calculated duration is not negative
+        duration = max(duration, 0)
+
+    # Load and resample the specified audio segment
+    y, sr = librosa.load(
+        path=audio_fsp, sr=sample_rate, offset=start_time, duration=duration, mono=True
+    )
+
+    return y, sr
 
 
 def create_playhead_overlay(
@@ -203,7 +225,7 @@ def profile_audio(params: Params) -> dict[str, Any]:
     print(f' f_high: { melspec["f_high"]}')
 
     # Load and resample the audio
-    y, sr = load_and_resample_mono(audio_fsp, target_sr)
+    y, sr = load_and_resample_mono(params)
     profiling_chunk_duration = params.get("audio_visualization", {}).get(
         "profiling_chunk_duration", 60
     )
@@ -222,7 +244,7 @@ def profile_audio(params: Params) -> dict[str, Any]:
             fmax=f_high,
         )
         maxpower = np.max(S)
-        print(f"profiling chunk max power : {maxpower}")
+        # print(f"profiling chunk max power : {maxpower}")
         if maxpower > global_max_power:
             global_max_power = maxpower
 
@@ -267,8 +289,24 @@ def generate_spectrograms(
     logging.info(f"y_chunk_samples: {y_chunk_samples}")
 
     full_chunk_duration_secs = y_chunk_samples / target_sample_rate
+    start_time = params.get("start", 0)  # Safely get start_time with a default of 0
+    print(f"start_time : {start_time}")
+    duration = params.get(
+        "duration", None
+    )  # Safely get duration with a default of None
+    # If duration is not provided (None), calculate it
+    if duration is None:
+        # Calculate the remaining duration of the audio file from start_time
+        audio_file_duration = librosa.get_duration(path=audio_fsp, sr=params["sr"])
+        print(f"audio_file_duration : {audio_file_duration}")
+        duration = audio_file_duration - start_time
+        # Ensure calculated duration is not negative
+        duration = max(duration, 0)
+    print(f"duration : {duration}")
 
-    total_duration_secs = librosa.get_duration(path=audio_fsp, sr=target_sample_rate)
+    # Adjusted to consider the effective processing duration
+    total_duration_secs = duration
+    print(f"total_duration_secs : {total_duration_secs}")
 
     current_position_secs = 0
 
@@ -282,12 +320,7 @@ def generate_spectrograms(
             total_duration_secs - current_position_secs,
         )
 
-        y, sr = librosa.load(
-            audio_fsp,
-            sr=target_sample_rate,
-            offset=current_position_secs,
-            duration=duration_secs,
-        )
+        y, sr = load_and_resample_mono(params)
 
         S = librosa.feature.melspectrogram(
             y=y,
@@ -716,19 +749,10 @@ def main():
         "-c", "--config", required=True, help="Configuration file path."
     )
 
-    # TODO #2
-    # parser.add_argument(
-    #     "--start",
-    #     help="Audio start time in seconds. Default: 0.",
-    #     type=float,
-    #     default=0,
-    # )
-
-    # parser.add_argument(
-    #     "--duration",
-    #     help="Audio clip duration in seconds. Processes till end if unspecified.",
-    #     type=float,
-    # )
+    parser.add_argument("--start", type=float, default=0, help="Start time in seconds")
+    parser.add_argument(
+        "--duration", type=float, default=None, help="Duration to process in seconds"
+    )
 
     # TODO #3
     # parser.add_argument(
