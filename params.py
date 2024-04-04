@@ -1,8 +1,9 @@
-import yaml
-import json
 import argparse
-import os
-from typing import Any, Dict, Optional
+import json
+from pathlib import Path
+from typing import Any, Dict, Optional, List
+
+import yaml
 
 
 class Params:
@@ -27,65 +28,144 @@ class Params:
         file_type: str = "yaml",
         default_config: Optional[Dict[str, Any]] = None,
     ):
-        """
-        Initializes the Params object, loads configuration from a file if provided,
-        and overlays with command-line arguments.
-        """
-        self.config = default_config or {}
-
-        if file_path and os.path.exists(file_path):
-            if file_type == "yaml":
-                self.config = self.load_yaml_config(file_path)
-            elif file_type == "json":
-                self.config = self.load_json_config(file_path)
-            else:
-                raise ValueError("Unsupported file type. Please use 'yaml' or 'json'.")
-
+        self._config = (
+            default_config or {}
+        )  # Use a private attribute to store the configuration dictionary
+        self._load_config(file_path, file_type)
         if args:
             self.overlay_args(args)
+        self._set_dynamic_attributes()
+        self.exclusions: List[str] = []  # List to hold keys to exclude during save
+
+    def _load_config(self, file_path: Optional[str], file_type: str):
+        if file_path:
+            path = Path(file_path)
+            if path.exists():
+                if file_type == "yaml":
+                    self._config = self.load_yaml_config(file_path)
+                elif file_type == "json":
+                    self._config = self.load_json_config(file_path)
+                else:
+                    raise ValueError(
+                        "Unsupported file type. Please use 'yaml' or 'json'."
+                    )
+
+    def _set_dynamic_attributes(self):
+        for key, value in self._config.items():
+            setattr(self, key, value)
+
+    def __getattr__(self, name: str) -> Any:
+        """Allows getting configuration values as attributes."""
+        try:
+            return self._config[name]
+        except KeyError:
+            raise AttributeError(f"'Params' object has no attribute '{name}'")
+
+    def __setattr__(self, name: str, value: Any):
+        """Allows setting configuration values as attributes."""
+        # This check prevents infinite recursion by allowing direct modification of '_config'
+        if name == "_config":
+            super().__setattr__(name, value)
+        else:
+            self._config[name] = value
+            super().__setattr__(
+                name, value
+            )  # Optionally update the attribute directly as well
 
     def __repr__(self):
         # Convert the internal configuration dictionary to a pretty-printed string
-        return json.dumps(self.config, indent=4, sort_keys=True)
+        return json.dumps(self._config, indent=4, sort_keys=True)
+
+    def set_exclusions(self, keys: List[str]):
+        """Sets the list of configuration keys to exclude during save operations.
+
+        Args:
+            keys (List[str]): A list of keys to exclude.
+        """
+        self.exclusions = keys
 
     def load_yaml_config(self, config_path: str) -> Dict[str, Any]:
-        """Loads a YAML configuration file."""
-        with open(config_path, "r") as file:
-            return yaml.safe_load(file)
+        """Loads a YAML configuration file using pathlib for enhanced path handling.
+
+        Args:
+            config_path (str): The path to the YAML configuration file.
+
+        Returns:
+            Dict[str, Any]: The loaded configuration dictionary.
+
+        Raises:
+            ValueError: If there are issues parsing the YAML file or the file cannot be found.
+        """
+        path = Path(config_path)
+        try:
+            content = path.read_text(encoding="utf-8")
+            return yaml.safe_load(content)
+        except yaml.YAMLError as e:
+            raise ValueError(f"Error parsing YAML file at {config_path}: {e}")
+        except FileNotFoundError:
+            raise ValueError(f"YAML configuration file not found at {config_path}")
 
     def load_json_config(self, config_path: str) -> Dict[str, Any]:
-        """Loads a JSON configuration file."""
-        with open(config_path, "r") as file:
-            return json.load(file)
+        """Loads a JSON configuration file using pathlib for enhanced path handling.
+
+        Args:
+            config_path (str): The path to the JSON configuration file.
+
+        Returns:
+            Dict[str, Any]: The loaded configuration dictionary.
+
+        Raises:
+            ValueError: If there are issues parsing the JSON file or the file cannot be found.
+        """
+        path = Path(config_path)
+        try:
+            content = path.read_text(encoding="utf-8")
+            return json.loads(content)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error parsing JSON file at {config_path}: {e}")
+        except FileNotFoundError:
+            raise ValueError(f"JSON configuration file not found at {config_path}")
 
     def overlay_args(self, args: argparse.Namespace):
         """Overlays command-line arguments onto the existing configuration."""
         for key, value in vars(args).items():
             if value is not None:
-                self.config[key] = value
+                self._config[key] = value
 
     def __getitem__(self, key: str) -> Any:
         """Allows for dict-like retrieval of configuration values."""
-        return self.config[key]
+        return self._config[key]
 
     def __setitem__(self, key: str, value: Any):
         """Allows for dict-like setting of configuration values."""
-        self.config[key] = value
+        self._config[key] = value
 
     def to_json(self) -> str:
         """Serializes the configuration to a JSON string."""
-        return json.dumps(self.config, indent=4)
+        return json.dumps(self._config, indent=4)
 
     def get(self, key: str, default: Any = None) -> Any:
         """Retrieves a configuration value, returning a default if the key is not found."""
-        return self.config.get(key, default)
+        return self._config.get(key, default)
 
     def save_to_yaml(self, file_path: str):
-        """Saves the current configuration to a YAML file."""
-        with open(file_path, "w") as file:
-            yaml.dump(self.config, file, default_flow_style=False)
+        """Saves the current configuration to a YAML file, respecting any set exclusions."""
+        config_to_save = {
+            key: value
+            for key, value in self._config.items()
+            if key not in self.exclusions
+        }
+        path = Path(file_path)
+        content = yaml.dump(config_to_save, default_flow_style=False)
+        path.write_text(content, encoding="utf-8")
 
     def save_to_json(self, file_path: str):
-        """Saves the current configuration to a JSON file."""
-        with open(file_path, "w") as file:
-            json.dump(self.config, file, indent=4)
+        """Saves the current configuration to a JSON file, respecting any set exclusions."""
+        config_to_save = {
+            key: value
+            for key, value in self._config.items()
+            if key not in self.exclusions
+        }
+        path = Path(file_path)
+        content = json.dumps(config_to_save, indent=4)
+        path.write_text(content, encoding="utf-8")
