@@ -596,38 +596,49 @@ def concatenate_images(image1, image2):
     return new_img
 
 
-def calculate_frequency_positions(f_low, f_high, freqs_of_interest, img_height):
+def calculate_frequency_positions(
+    f_low: float, f_high: float, freqs_of_interest: List[float], img_height: int
+) -> List[Tuple[float, float]]:
     """
     Calculate the vertical positions of given frequencies on a mel spectrogram image and returns
     them along with the corresponding frequency if they fall within the image height.
 
+    The function calculates the positions by converting the frequency values to the mel scale,
+    determining their relative positions within the spectrogram's frequency range, and then mapping
+    these to pixel positions on the image.
+
     Parameters:
-    - f_low: The lowest frequency in Hz included in the spectrogram.
-    - f_high: The highest frequency in Hz included in the spectrogram.
-    - freqs_of_interest: A list of frequencies in Hz for which to calculate positions.
+    - f_low: The lowest frequency (in Hz) included in the spectrogram.
+    - f_high: The highest frequency (in Hz) included in the spectrogram.
+    - freqs_of_interest: A list of frequencies (in Hz) for which to calculate positions.
     - img_height: The height of the spectrogram image in pixels.
 
     Returns:
-    - A list of tuples (y_position, frequency) for frequencies within the image height.
+    - A list of tuples (y_position, frequency) for frequencies within the image height. Each tuple
+      contains the vertical position in the image (as a pixel value) and the corresponding frequency.
     """
-    # Convert frequency bounds and frequencies of interest to the mel scale
+    # Convert the low and high frequency bounds, as well as the frequencies of interest, into the mel scale.
+    # The mel scale is a perceptual scale of pitches judged by listeners to be equal in distance from one another.
     mel_low = librosa.hz_to_mel(f_low)
     mel_high = librosa.hz_to_mel(f_high)
     mels_of_interest = librosa.hz_to_mel(freqs_of_interest)
 
-    # Calculate the relative position of each frequency of interest within the mel range
+    # Calculate the relative position of each frequency of interest within the total mel range.
+    # This is a value between 0 and 1 indicating the position of the frequency within our defined range.
     relative_positions = (mels_of_interest - mel_low) / (mel_high - mel_low)
 
-    # Convert these positions to percentages of the spectrogram height
+    # Convert these relative positions to actual y-axis positions on the spectrogram image.
+    # We invert the positions because in images, the y-axis is often inverted (0 at the top).
     y_positions = (1 - relative_positions) * img_height
 
-    # Pair positions with frequencies, exclude out-of-bounds, and return as list of tuples
+    # Pair each calculated position with its corresponding frequency, filtering out any frequencies that
+    # fall outside of the mel range (i.e., those that have a relative position less than 0 or greater than 1).
     pos_freq_pairs = [
         (pos, freq)
         for pos, freq, rel_pos in zip(
             y_positions, freqs_of_interest, relative_positions
         )
-        if 0 <= rel_pos <= 1
+        if 0 <= rel_pos <= 1  # Ensure the frequency is within the spectrogram range
     ]
 
     return pos_freq_pairs
