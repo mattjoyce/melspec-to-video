@@ -2,8 +2,6 @@ import argparse
 import logging
 import subprocess
 import sys
-import threading
-import time
 from pathlib import Path
 from typing import Any, Final, List, Tuple
 
@@ -11,7 +9,6 @@ import librosa
 import librosa.display
 import matplotlib.pyplot as plt
 import numpy as np
-import psutil
 from PIL import Image, ImageDraw, ImageFont
 from tqdm import tqdm
 
@@ -19,11 +16,17 @@ from params import Params
 
 # Mel Scale Spectrogram Video from Audio
 
-# This script transforms audio files into visual spectrogram representations and encodes them into a video file.
-# It leverages librosa for audio processing and Mel spectrogram generation, matplotlib for plotting, and FFmpeg for video encoding.
+# This script transforms audio files into visual spectrogram representations
+# and encodes them into a video file.
+# It leverages librosa for audio processing and Mel spectrogram generation,
+# matplotlib for plotting, and FFmpeg for video encoding.
 
-# Configuration is managed via a YAML file, allowing customization of video dimensions, frame rate, audio processing parameters, and optional color palettes for the spectrogram.
-# The script supports dynamic adjustment of spectrogram image widths based on audio chunk sizes, ensuring smooth transitions and consistent visual output across the video.
+# Configuration is managed via a YAML file, allowing customization of video
+# dimensions, frame rate, audio processing parameters, and optional color
+# palettes for the spectrogram.
+# The script supports dynamic adjustment of spectrogram image widths #
+# based on audio chunk sizes, ensuring smooth transitions and
+# consistent visual output across the video.
 
 # Features include:
 # - Loading and processing of audio data in configurable chunks.
@@ -38,10 +41,6 @@ from params import Params
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
-
-# these are used as globasl to track memory usgae
-memory_usage = 0
-max_mem = 0  # maximum allowed mem usage in %
 
 
 def allow_save(fullfilepath: Path, allowoverwrite: bool) -> bool:
@@ -165,6 +164,7 @@ def create_playhead_overlay(
 def adjust_spectrogram_for_playhead(
     params: Params, image: Image.Image, is_first: bool, is_last: bool
 ) -> Image.Image:
+    """function to extend the spectrogram to accomodate moving the playhead"""
     image = image.convert("RGBA")
     frame_width = params["video"]["width"]
     playhead_position = params["audio_visualization"].get("playhead_position", 0.5)
@@ -189,17 +189,6 @@ def adjust_spectrogram_for_playhead(
         image = concatenate_images(image, play_out_section)
 
     return image
-
-
-def monitor_memory_usage(interval=1):
-    """Monitors memory usage at specified intervals (in seconds) and updates the global memory_usage variable."""
-    global memory_usage, max_mem
-    while True:
-        memory = psutil.virtual_memory()
-        memory_usage = (memory.used / memory.total) * 100
-        if max_mem < memory_usage:
-            max_mem = memory_usage
-        time.sleep(interval)
 
 
 def profile_audio(params: Params) -> dict[str, Any]:
@@ -245,8 +234,7 @@ def profile_audio(params: Params) -> dict[str, Any]:
         )
         maxpower = np.max(S)
         # print(f"profiling chunk max power : {maxpower}")
-        if maxpower > global_max_power:
-            global_max_power = maxpower
+        global_max_power = max(global_max_power, maxpower)
 
     return {
         "max_power": float(global_max_power),
@@ -402,6 +390,8 @@ def generate_spectrograms(
 
 
 def get_ffmpeg_cmd(params: Params, project: Params) -> List[str]:
+    """Function to select the best ffmpeg command line arguments"""
+
     # localise some variable we will use frequently
     video_fsp = Path(project["project_path"]) / params["output"]
     print(video_fsp)
@@ -734,13 +724,7 @@ def create_vertical_axis(
 
 
 def main():
-
-    # Start the memory monitoring thread
-    monitor_thread = threading.Thread(
-        target=monitor_memory_usage, args=(1,), daemon=True
-    )
-    monitor_thread.start()
-
+    """process command line argument and config"""
     parser = argparse.ArgumentParser(
         description="Generate a scrolling spectrogram video from an audio file."
     )
@@ -761,6 +745,8 @@ def main():
     #     action="store_true",
     #     default=None,
     # )
+
+    # TODO Add --force to ignore existing project.json
 
     parser.add_argument(
         "--sr",
