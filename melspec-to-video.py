@@ -90,7 +90,7 @@ def load_and_resample_mono(params: Params) -> Tuple[np.ndarray, int]:
     # Extract necessary parameters
     start_time = params.get("start_time", 0)
     duration = params.get("duration", None)
-    audio_fsp = params["input"]
+    audio_fsp = params.input
     sample_rate = params.get("sr", None)
 
     # Determine the total duration of the audio file if duration is not explicitly provided
@@ -122,8 +122,8 @@ def create_playhead_overlay(
     Returns:
         Image: An RGBA Image object representing the overlay with the semi-transparent playhead line.
     """
-    frame_rate = params["video"].get("frame_rate", 30)
-    playhead = params["overlays"]["playhead"]
+    frame_rate = params.video.get("frame_rate", 30)
+    playhead = params.overlays["playhead"]
     playhead_position = playhead.get("playhead_position", 0.5)
     playhead_rgba = tuple(playhead.get("playhead_rgba", [255, 255, 255, 192]))
 
@@ -165,8 +165,8 @@ def adjust_spectrogram_for_playhead(
 ) -> Image.Image:
     """function to extend the spectrogram to accomodate moving the playhead"""
     image = image.convert("RGBA")
-    frame_width = params["video"]["width"]
-    playhead = params["overlays"]["playhead"]
+    frame_width = params.video["width"]
+    playhead = params.overlays["playhead"]
     playhead_position = playhead.get("playhead_position", 0.5)
     print(f"playhead : {playhead_position}")
     playhead_section_rgba = tuple(playhead.get("playhead_section_rgba", [0, 0, 0, 0]))
@@ -194,7 +194,7 @@ def profile_audio(params: Params) -> dict[str, Any]:
     # Initialization and configuration extraction
     logging.info("Profiling start")
 
-    audio_fsp = params["input"]
+    audio_fsp = params.input
     logging.info(f"Audio file in: {audio_fsp}")
 
     target_sr = params.get("sr", None)
@@ -286,7 +286,7 @@ def generate_spectrograms(
     # If duration is not provided (None), calculate it
     if duration is None:
         # Calculate the remaining duration of the audio file from start_time
-        audio_file_duration = librosa.get_duration(path=audio_fsp, sr=params["sr"])
+        audio_file_duration = librosa.get_duration(path=audio_fsp, sr=params.sr)
         print(f"audio_file_duration : {audio_file_duration}")
         duration = audio_file_duration - start_time
         # Ensure calculated duration is not negative
@@ -394,13 +394,13 @@ def get_ffmpeg_cmd(params: Params, project: Params) -> List[str]:
     """Function to select the best ffmpeg command line arguments"""
 
     # localise some variable we will use frequently
-    video_fsp = Path(project["project_path"]) / params["output"]
+    video_fsp = Path(project["project_path"]) / params.output
     print(video_fsp)
 
     # geometry of resulting mp4
-    frame_width: Final[int] = params["video"].get("width", 800)
-    frame_height: Final[int] = params["video"].get("height", 200)
-    frame_rate: Final[int] = params["video"].get("frame_rate", 30)
+    frame_width: Final[int] = params.video.get("width", 800)
+    frame_height: Final[int] = params.video.get("height", 200)
+    frame_rate: Final[int] = params.video.get("frame_rate", 30)
 
     ffmpeg_cmd_cpu: List[str] = [
         "ffmpeg",
@@ -470,18 +470,18 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
     """
     logging.info("MP4 Encoding start")
     # localise some variable we will use frequently
-    video_fsp = Path(project["project_path"]) / params["output"]
+    video_fsp = Path(project["project_path"]) / params.output
     print(video_fsp)
 
     # geometry of resulting mp4
-    frame_width: Final[int] = params["video"].get("width", 800)
-    frame_height: Final[int] = params["video"].get("height", 200)
-    frame_rate: Final[int] = params["video"].get("frame_rate", 30)
+    frame_width: Final[int] = params.video.get("width", 800)
+    frame_height: Final[int] = params.video.get("height", 200)
+    frame_rate: Final[int] = params.video.get("frame_rate", 30)
 
     print(f"frame_height: {frame_height}")
     print(f"frame_width: {frame_width}")
 
-    seconds_in_view: Final = params["audio_visualization"]["seconds_in_view"]
+    seconds_in_view: Final = params.audio_visualization["seconds_in_view"]
 
     # get the ffmpeg command line parameter for gpu, or cpu
     ffmpeg_cmd = get_ffmpeg_cmd(params, project)
@@ -533,10 +533,8 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
         # if playhead is enabled, the image size changes
         # this alters the number of frames needed to render
         # actural overlay is added later
-        if params["overlays"]["playhead"].get("enabled", None):
-            playhead_position = params["overlays"]["playhead"].get(
-                "playhead_position", 0
-            )
+        if params.overlays["playhead"].get("enabled", None):
+            playhead_position = params.overlays["playhead"].get("playhead_position", 0)
             work_image = adjust_spectrogram_for_playhead(
                 params, spectrogram_image, is_first, is_last
             )
@@ -577,7 +575,7 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
             cropped_frame_rgba = cropped_frame.convert("RGBA")
 
             ### Insert frame overlays
-            if params["overlays"]["playhead"].get("enabled", None):
+            if params.overlays["playhead"].get("enabled", None):
                 # create overlay
                 playhead_overlay_rgba = create_playhead_overlay(
                     params, global_frame_count, cropped_frame_rgba.size
@@ -587,7 +585,7 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
                     cropped_frame_rgba, playhead_overlay_rgba
                 )
 
-            if params["overlays"]["frequency_axis"].get("enabled", None):
+            if params.overlays["frequency_axis"].get("enabled", None):
                 # create overlay
                 axis_overlay = create_vertical_axis(
                     params,
@@ -697,7 +695,7 @@ def create_vertical_axis(
     axis = params.get("overlays", {}).get("frequency_axis")
     x_pos = width * axis["axis_position"]
     ink_color = tuple(axis["axis_rgba"])
-    melspec = params["mel_spectrogram"]
+    melspec = params.mel_spectrogram
 
     # Create a transparent image
     axis_image = Image.new("RGBA", (width, height), (255, 0, 0, 0))
