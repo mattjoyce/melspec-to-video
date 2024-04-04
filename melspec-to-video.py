@@ -91,7 +91,7 @@ def load_and_resample_mono(params: Params) -> Tuple[np.ndarray, int]:
     start_time = params.get("start_time", 0)
     duration = params.get("duration", None)
     audio_fsp = params["input"]
-    sample_rate = params["sr"]
+    sample_rate = params.get("sr", None)
 
     # Determine the total duration of the audio file if duration is not explicitly provided
     if duration is None:
@@ -198,7 +198,8 @@ def profile_audio(params: Params) -> dict[str, Any]:
 
     audio_fsp = params["input"]
     logging.info(f"Audio file in: {audio_fsp}")
-    target_sr = params["sr"]
+
+    target_sr = params.get("sr", None)
     logging.info(f"Target Sample Rate: {target_sr}")
 
     # Configuration for Mel spectrogram
@@ -268,7 +269,9 @@ def generate_spectrograms(
     max_spectrogram_width = audiovis.get("max_spectrogram_width", 1000)
     logging.info(f"max_spectrogram_width: {max_spectrogram_width}")
 
-    target_sample_rate = params["sr"]
+    target_sample_rate = params.get("sr", None)
+    if not target_sample_rate:
+        target_sample_rate = project["audio_metadata"].get("sample_rate", 22050)
 
     samples_per_pixel = (audiovis["seconds_in_view"] * target_sample_rate) / video[
         "width"
@@ -752,6 +755,7 @@ def main():
         "--sr",
         help="Audio sample rate. Overrides the source sample rate.",
         type=int,
+        default=None,
     )
 
     parser.add_argument(
@@ -770,6 +774,9 @@ def main():
         help='Output video file path. Default: "output.mp4".',
         default="output.mp4",
     )
+
+    # we default bool args to None, so they are falsy but not == False
+    # if it was False the defautl behavioir or argparse, it would always overwrite config yaml
 
     parser.add_argument(
         "--overwrite",
