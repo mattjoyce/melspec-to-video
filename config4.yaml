@@ -22,6 +22,12 @@ video:
   width: 800
 overlays:
   frequency_axis:
-      freq_hz : [100, 1000, 3000, 5000, 8000]
-      axis_position: 0.25  # Centered horizontally
-      axis_rgba: [255,255,255,192] # white, slightly transparent
+    freq_hz : [100, 1000, 3000, 5000, 8000]
+    axis_position: 0.25  # Centered horizontally
+    axis_rgba: [255,255,255,192] # white, slightly transparent
+  playhead:
+    enabled : True
+    playhead_position: 0.5  # Centered horizontally
+    playhead_rgba: [255,255,255,192] # white, slightly transparent
+    playhead_width: 2 # Assuming pixels for thick
+    playhead_section_rgba : [0,0,0,0]

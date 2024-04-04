@@ -123,12 +123,11 @@ def create_playhead_overlay(
         Image: An RGBA Image object representing the overlay with the semi-transparent playhead line.
     """
     frame_rate = params["video"].get("frame_rate", 30)
-    playhead_position = params["audio_visualization"].get("playhead_position", 0.5)
-    playhead_rgba = tuple(
-        params["audio_visualization"].get("playhead_rgba", [255, 255, 255, 192])
-    )
+    playhead = params["overlays"]["playhead"]
+    playhead_position = playhead.get("playhead_position", 0.5)
+    playhead_rgba = tuple(playhead.get("playhead_rgba", [255, 255, 255, 192]))
 
-    playhead_width = params["audio_visualization"].get("playhead_width", 2)
+    playhead_width = playhead.get("playhead_width", 2)
     image_width, image_height = image_size
 
     # Create a transparent overlay
@@ -167,11 +166,10 @@ def adjust_spectrogram_for_playhead(
     """function to extend the spectrogram to accomodate moving the playhead"""
     image = image.convert("RGBA")
     frame_width = params["video"]["width"]
-    playhead_position = params["audio_visualization"].get("playhead_position", 0.5)
+    playhead = params["overlays"]["playhead"]
+    playhead_position = playhead.get("playhead_position", 0.5)
     print(f"playhead : {playhead_position}")
-    playhead_section_rgba = tuple(
-        params["audio_visualization"].get("playhead_section_rgba", [0, 0, 0, 0])
-    )
+    playhead_section_rgba = tuple(playhead.get("playhead_section_rgba", [0, 0, 0, 0]))
     if is_first:
         lead_in_width = int(frame_width * playhead_position)
         lead_in_section = Image.new(
@@ -483,9 +481,6 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
     print(f"frame_height: {frame_height}")
     print(f"frame_width: {frame_width}")
 
-    playhead_position: Final = params["audio_visualization"].get(
-        "playhead_position", {}
-    )
     seconds_in_view: Final = params["audio_visualization"]["seconds_in_view"]
 
     # get the ffmpeg command line parameter for gpu, or cpu
@@ -527,47 +522,52 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
         # retrieve the image
         spectrogram_image = Image.open(Path(project["project_path"]) / filename)
 
-        work_image = spectrogram_image
-
-        # add overlay to the image and add a lead in if #1
-        if params["audio_visualization"].get("playhead_position", None):
-            work_image = adjust_spectrogram_for_playhead(
-                params, spectrogram_image, is_first, is_last
-            )
-
-        # the number of frame we need to render the spectrograms
+        # the number of frames we need to render the spectrograms
         num_frames = int(image_duration * frame_rate)
 
         # number of pixels to slide for each frame
         step_px = spectrogram_image.width / num_frames
         print(f"step_px : {step_px}")
+        work_image = spectrogram_image
 
-        # calculate how much time is used for the lead-in
-        lead_in_duration = seconds_in_view * playhead_position
-        print(f"lead in duration : {lead_in_duration}")
-        lead_in_frames = int((lead_in_duration) * frame_rate)
-        if is_first:
-            num_frames += lead_in_frames
-            print(f"lead in frames : {lead_in_frames}")
+        # if playhead is enabled, the image size changes
+        # this alters the number of frames needed to render
+        # actural overlay is added later
+        if params["overlays"]["playhead"].get("enabled", None):
+            playhead_position = params["overlays"]["playhead"].get(
+                "playhead_position", 0
+            )
+            work_image = adjust_spectrogram_for_playhead(
+                params, spectrogram_image, is_first, is_last
+            )
 
-        if is_last:
-            num_frames -= lead_in_frames
-            print(f"lead in frames : {lead_in_frames}")
+            # calculate how much time is used for the lead-in
+            lead_in_duration = seconds_in_view * playhead_position
+            print(f"lead in duration : {lead_in_duration}")
+            lead_in_frames = int((lead_in_duration) * frame_rate)
+            if is_first:
+                num_frames += lead_in_frames
+
+            if is_last:
+                num_frames -= lead_in_frames
 
         print(f"num_frames: {num_frames}")
 
         # check
         # work_image.save(Path(project["project_path"] / f"adjusted-{filename}"))
 
-        # extend the image to cover the join
+        # as we are using a sliding window crop, at the end of the image, we spillover
+        # into the next image, so we just append one whole frame width from the next
         if i < total_images - 1:
             next_image_metadata = project["images_metadata"][i + 1]
             next_filename = next_image_metadata["filename"]
             next_image = Image.open(Path(project["project_path"]) / next_filename)
             # Assume frame_width is the width of the frame to append from the next image
+            # FIXME #4 if the last image is smaller than a frame width, something odd might happen
             next_image_section = next_image.crop((0, 0, frame_width, frame_height))
             work_image = concatenate_images(work_image, next_image_section)
 
+        # cropping, streaming, encoding loop
         for i in range(num_frames):
             global_frame_count += 1
             crop_start_x = int(i * step_px)
@@ -575,26 +575,31 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
 
             cropped_frame = work_image.crop((crop_start_x, 0, crop_end_x, frame_height))
             cropped_frame_rgba = cropped_frame.convert("RGBA")
+
             ### Insert frame overlays
-            playhead_overlay_rgba = create_playhead_overlay(
-                params, global_frame_count, cropped_frame_rgba.size
-            )
+            if params["overlays"]["playhead"].get("enabled", None):
+                # create overlay
+                playhead_overlay_rgba = create_playhead_overlay(
+                    params, global_frame_count, cropped_frame_rgba.size
+                )
+                # apply to frame
+                cropped_frame_rgba = Image.alpha_composite(
+                    cropped_frame_rgba, playhead_overlay_rgba
+                )
 
-            final_frame = Image.alpha_composite(
-                cropped_frame_rgba, playhead_overlay_rgba
-            )
-
-            axis = params.get("overlays", {}).get("frequency_axis", None)
-            if axis:
+            if params["overlays"]["frequency_axis"].get("enabled", None):
+                # create overlay
                 axis_overlay = create_vertical_axis(
                     params,
                     cropped_frame_rgba.size,
                 )
-
-            final_frame = Image.alpha_composite(final_frame, axis_overlay)
+                # apply to frame
+                cropped_frame_rgba = Image.alpha_composite(
+                    cropped_frame_rgba, axis_overlay
+                )
 
             # Convert the image to bytes
-            final_frame_rgb = final_frame.convert("RGB")
+            final_frame_rgb = cropped_frame_rgba.convert("RGB")
             final_frame_bytes = final_frame_rgb.tobytes()
 
             # Write the frame bytes to ffmpeg's stdin
@@ -602,7 +607,7 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
                 ffmpeg_process.stdin.write(final_frame_bytes)
 
     # Close ffmpeg's stdin to signal end of input
-    # ffmpeg_process.wait()
+    #
     if ffmpeg_process.stdin is not None:
         ffmpeg_process.stdin.close()
 
