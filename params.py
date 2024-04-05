@@ -1,3 +1,5 @@
+""" class to help manage parameters and config """
+
 import argparse
 import json
 from pathlib import Path
@@ -9,16 +11,17 @@ import yaml
 class Params:
     """
     A configuration manager that supports loading from YAML or JSON files,
-    overlaying with command-line arguments, and providing dict-like access to configuration values.
+    overlaying with command-line arguments,
+    and providing dict-like access to configuration values.
 
     Attributes:
         config (Dict[str, Any]): The current configuration dictionary.
 
     Args:
-        file_path (Optional[str]): Path to a YAML or JSON configuration file. Default is None.
-        args (Optional[argparse.Namespace]): Command-line arguments object. Default is None.
-        file_type (str): The type of the configuration file ('yaml' or 'json'). Default is 'yaml'.
-        default_config (Optional[Dict[str, Any]]): A default configuration dictionary. Default is None.
+      file_path (Optional[str]): Path to a YAML or JSON configuration file. Default is None.
+      args (Optional[argparse.Namespace]): Command-line arguments object. Default is None.
+      file_type (str): The type of the configuration file ('yaml' or 'json'). Default is 'yaml'.
+      default_config (Optional[Dict[str, Any]]): A default config dictionary. Default is None.
     """
 
     def __init__(
@@ -51,6 +54,7 @@ class Params:
                     )
 
     def _set_dynamic_attributes(self):
+        """internal setter for key in the internal config list"""
         for key, value in self._config.items():
             setattr(self, key, value)
 
@@ -58,8 +62,8 @@ class Params:
         """Allows getting configuration values as attributes."""
         try:
             return self._config[name]
-        except KeyError:
-            raise AttributeError(f"'Params' object has no attribute '{name}'")
+        except KeyError as e:
+            raise AttributeError(f"'Params' object has no attribute '{name}'") from e
 
     def __setattr__(self, name: str, value: Any):
         """Allows setting configuration values as attributes, distinguishing between
@@ -104,9 +108,11 @@ class Params:
             content = path.read_text(encoding="utf-8")
             return yaml.safe_load(content)
         except yaml.YAMLError as e:
-            raise ValueError(f"Error parsing YAML file at {config_path}: {e}")
+            raise ValueError(f"Error parsing YAML file at {config_path}: {e}") from e
         except FileNotFoundError:
-            raise ValueError(f"YAML configuration file not found at {config_path}")
+            raise ValueError(
+                f"YAML configuration file not found at {config_path}"
+            ) from e
 
     def load_json_config(self, config_path: str) -> Dict[str, Any]:
         """Loads a JSON configuration file using pathlib for enhanced path handling.
@@ -125,9 +131,11 @@ class Params:
             content = path.read_text(encoding="utf-8")
             return json.loads(content)
         except json.JSONDecodeError as e:
-            raise ValueError(f"Error parsing JSON file at {config_path}: {e}")
+            raise ValueError(f"Error parsing JSON file at {config_path}: {e}") from e
         except FileNotFoundError:
-            raise ValueError(f"JSON configuration file not found at {config_path}")
+            raise ValueError(
+                f"JSON configuration file not found at {config_path}"
+            ) from e
 
     def overlay_args(self, args: argparse.Namespace):
         """Overlays command-line arguments onto the existing configuration."""

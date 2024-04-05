@@ -1,3 +1,5 @@
+""" Module to analyse audio, and make videos from spectrograms."""
+
 import argparse
 import logging
 import subprocess
@@ -105,7 +107,7 @@ def load_and_resample_mono(params: Params) -> Tuple[np.ndarray, int]:
         path=audio_fsp, sr=sample_rate, offset=start_time, duration=duration, mono=True
     )
 
-    return y, sr
+    return y, int(sr)
 
 
 def create_playhead_overlay(
@@ -195,7 +197,7 @@ def profile_audio(params: Params) -> dict[str, Any]:
     logging.info("Profiling start")
 
     audio_fsp = params.input
-    logging.info(f"Audio file in: {audio_fsp}")
+    logging.info("Audio file in: %s", audio_fsp)
 
     target_sr = params.get("sr", None)
     logging.info(f"Target Sample Rate: {target_sr}")
@@ -561,7 +563,6 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
             next_filename = next_image_metadata["filename"]
             next_image = Image.open(Path(project["project_path"]) / next_filename)
             # Assume frame_width is the width of the frame to append from the next image
-            # FIXME #4 if the last image is smaller than a frame width, something odd might happen
             next_image_section = next_image.crop((0, 0, frame_width, frame_height))
             work_image = concatenate_images(work_image, next_image_section)
 
@@ -694,7 +695,7 @@ def create_vertical_axis(
     width, height = image_size
     axis = params.overlays.get("frequency_axis")
     x_pos = width * axis["axis_position"]
-    ink_color = tuple(axis["axis_rgba"])
+    ink_color = tuple(axis["axis_rgba"][:3])
     melspec = params.mel_spectrogram
 
     # Create a transparent image
@@ -752,16 +753,6 @@ def main():
     parser.add_argument(
         "--duration", type=float, default=None, help="Duration to process in seconds"
     )
-
-    # TODO #3
-    # parser.add_argument(
-    #     "--encodeaudio",
-    #     help="add the audio to the MP4",
-    #     action="store_true",
-    #     default=None,
-    # )
-
-    # TODO Add --force to ignore existing project.json
 
     parser.add_argument(
         "--sr",
