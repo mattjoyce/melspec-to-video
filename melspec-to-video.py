@@ -200,7 +200,7 @@ def profile_audio(params: Params) -> dict[str, Any]:
     logging.info("Audio file in: %s", audio_fsp)
 
     target_sr = params.get("sr", None)
-    logging.info(f"Target Sample Rate: {target_sr}")
+    logging.info("Target Sample Rate: %s", target_sr)
 
     # Configuration for Mel spectrogram
     melspec = params.get("mel_spectrogram", {})
@@ -267,7 +267,7 @@ def generate_spectrograms(
     db_high = melspec.get("db_high", 0)
 
     max_spectrogram_width = audiovis.get("max_spectrogram_width", 1000)
-    logging.info(f"max_spectrogram_width: {max_spectrogram_width}")
+    logging.info("max_spectrogram_width: %s", max_spectrogram_width)
 
     target_sample_rate = params.get("sr", None)
     if not target_sample_rate:
@@ -277,7 +277,7 @@ def generate_spectrograms(
         "width"
     ]
     y_chunk_samples = int(samples_per_pixel * max_spectrogram_width)
-    logging.info(f"y_chunk_samples: {y_chunk_samples}")
+    logging.info("y_chunk_samples: %d ", y_chunk_samples)
 
     full_chunk_duration_secs = y_chunk_samples / target_sample_rate
     start_time = params.get("start", 0)  # Safely get start_time with a default of 0
@@ -806,14 +806,14 @@ def main():
     # resolve all paths and check as needed
     config_path = Path(args.config).resolve()
     if not config_path.exists():
-        logging.error(f"Config does not exist : {config_path}")
+        logging.error("Config does not exist : %s", config_path)
         sys.exit()
     else:
         print(f"Config file : {config_path}")
 
     source_audio_path = Path(args.input).resolve()
     if not source_audio_path.exists():
-        logging.error(f"Input does not exist : {source_audio_path}")
+        logging.error("Input does not exist : %s", source_audio_path)
         sys.exit()
     else:
         print(f"Source Audio Path : {source_audio_path}")
@@ -826,7 +826,7 @@ def main():
     if args.path:
         project_path = Path(args.path).resolve()
         if not project_path.exists():
-            logging.error(f"Project folder does not exist : {project_path}")
+            logging.error("Project folder does not exist : %s", project_path)
             sys.exit()
     else:
         project_path = Path.cwd().resolve()
