@@ -175,7 +175,7 @@ class Params:
         config_to_save = {
             key: value
             for key, value in self._config.items()
-            if key not in self.exclusions
+            if key not in self._exclusions
         }
         path = Path(file_path)
         content = json.dumps(config_to_save, indent=4)
