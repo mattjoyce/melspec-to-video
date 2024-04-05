@@ -692,7 +692,7 @@ def create_vertical_axis(
 
     # localise some variables
     width, height = image_size
-    axis = params.get("overlays", {}).get("frequency_axis")
+    axis = params.overlays.get("frequency_axis")
     x_pos = width * axis["axis_position"]
     ink_color = tuple(axis["axis_rgba"])
     melspec = params.mel_spectrogram
@@ -727,6 +727,15 @@ def create_vertical_axis(
             font=font,
         )
     return axis_image
+
+
+def save_config(params: Params) -> bool:
+    # setup some keys we want to exclude
+    params.set_exclusions(["config", "saveconfig"])
+    print(params.exclusions)
+    newfile = Path(params.saveconfig).resolve()
+    params.save_to_yaml(str(newfile))
+    return True
 
 
 def main():
@@ -794,6 +803,12 @@ def main():
         default=None,
     )
 
+    parser.add_argument(
+        "--saveconfig",
+        help="Combine args with config and save.",
+        default=None,
+    )
+
     args = parser.parse_args()
     params = Params(args.config, args=args, file_type="yaml")
 
@@ -812,11 +827,11 @@ def main():
     else:
         print(f"Source Audio Path : {source_audio_path}")
 
-    # the mp4 file - will be tested later and overwriten if needed
-    output_path = Path(args.output).resolve()
-
+    if args.saveconfig:
+        save_config(params)
     print(params)
 
+    ## Project Data
     if args.path:
         project_path = Path(args.path).resolve()
         if not project_path.exists():

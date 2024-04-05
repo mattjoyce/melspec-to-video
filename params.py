@@ -35,7 +35,7 @@ class Params:
         if args:
             self.overlay_args(args)
         self._set_dynamic_attributes()
-        self.exclusions: List[str] = []  # List to hold keys to exclude during save
+        self._exclusions: List[str] = []  # List to hold keys to exclude during save
 
     def _load_config(self, file_path: Optional[str], file_type: str):
         if file_path:
@@ -62,15 +62,18 @@ class Params:
             raise AttributeError(f"'Params' object has no attribute '{name}'")
 
     def __setattr__(self, name: str, value: Any):
-        """Allows setting configuration values as attributes."""
-        # This check prevents infinite recursion by allowing direct modification of '_config'
-        if name == "_config":
+        """Allows setting configuration values as attributes, distinguishing between
+        special attributes and configuration keys."""
+        if name in ["_exclusions"]:
+            # Directly handle special attributes; they should not be added to _config
+            object.__setattr__(self, name, value)
+        elif name == "_config" or name.startswith("_"):
+            # Handle private attributes, including _config itself, normally
             super().__setattr__(name, value)
         else:
+            # All other attributes are treated as configuration keys
             self._config[name] = value
-            super().__setattr__(
-                name, value
-            )  # Optionally update the attribute directly as well
+            super().__setattr__(name, value)
 
     def __repr__(self):
         # Convert the internal configuration dictionary to a pretty-printed string
@@ -82,7 +85,7 @@ class Params:
         Args:
             keys (List[str]): A list of keys to exclude.
         """
-        self.exclusions = keys
+        self._exclusions = keys
 
     def load_yaml_config(self, config_path: str) -> Dict[str, Any]:
         """Loads a YAML configuration file using pathlib for enhanced path handling.
@@ -153,7 +156,7 @@ class Params:
         config_to_save = {
             key: value
             for key, value in self._config.items()
-            if key not in self.exclusions
+            if key not in self._exclusions
         }
         path = Path(file_path)
         content = yaml.dump(config_to_save, default_flow_style=False)
