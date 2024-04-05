@@ -74,7 +74,9 @@ def allow_save(fullfilepath: Path, allowoverwrite: bool) -> bool:
     return False  # This line is technically redundant due to the sys.exit above
 
 
-def load_and_resample_mono(params: Params) -> Tuple[np.ndarray, int]:
+def load_and_resample_mono(
+    params: Params, start_secs: int = None, duration_secs: int = None
+) -> Tuple[np.ndarray, int]:
     """
     Load a segment of an audio file, resample it to a specified sample rate, and ensure it is mono.
 
@@ -89,22 +91,34 @@ def load_and_resample_mono(params: Params) -> Tuple[np.ndarray, int]:
     Returns:
     - Tuple[np.ndarray, int]: A tuple containing the audio data as a numpy array and the sample rate as an integer.
     """
-    # Extract necessary parameters
-    start_time = params.get("start_time", 0)
-    duration = params.get("duration", None)
+
     audio_fsp = params.input
     sample_rate = params.get("sr", None)
 
+    # Extract necessary parameters
+    if not start_secs:
+        start_secs = params.get("start_time", 0)
+        print(f"Start not specificied, using cli or 0 : {start_secs}")
+
+    if not duration_secs:
+        duration_secs = params.get("duration", None)
+        print(f"Duration not specificied, using cli or None: {duration_secs}")
+
     # Determine the total duration of the audio file if duration is not explicitly provided
-    if duration is None:
+    if duration_secs is None:
         total_duration = librosa.get_duration(path=audio_fsp)
-        duration = total_duration - start_time
+        duration_secs = total_duration - start_secs
         # Ensure that the calculated duration is not negative
-        duration = max(duration, 0)
+        duration_secs = max(duration_secs, 0)
+        print(f"Duration calculated: {duration_secs}")
 
     # Load and resample the specified audio segment
     y, sr = librosa.load(
-        path=audio_fsp, sr=sample_rate, offset=start_time, duration=duration, mono=True
+        path=audio_fsp,
+        sr=sample_rate,
+        offset=start_secs,
+        duration=duration_secs,
+        mono=True,
     )
 
     return y, int(sr)
@@ -194,19 +208,22 @@ def adjust_spectrogram_for_playhead(
 def profile_audio(params: Params) -> dict[str, Any]:
     """Function to derive the global max power reference from an audio file."""
     # Initialization and configuration extraction
-    logging.info("Profiling start")
+    logging.info("PROFILING START")
 
     audio_fsp = params.input
     logging.info("Audio file in: %s", audio_fsp)
 
     target_sr = params.get("sr", None)
+    if not target_sr:
+        target_sr = librosa.get_samplerate(audio_fsp)
     logging.info("Target Sample Rate: %s", target_sr)
+    params["sr"] = target_sr
 
     # Configuration for Mel spectrogram
     melspec = params.get("mel_spectrogram", {})
 
     f_low = melspec.get("f_low", 0)
-    f_high = melspec.get("f_high", 22050)
+    f_high = melspec.get("f_high", target_sr / 2)
     hop_length = melspec.get("hop_length", 512)
     n_fft = melspec.get("n_fft", 2048)
     n_mels = melspec.get("n_mels", 100)
@@ -214,33 +231,35 @@ def profile_audio(params: Params) -> dict[str, Any]:
     print(f' f_low : { melspec["f_low"]}')
     print(f' f_high: { melspec["f_high"]}')
 
-    # Load and resample the audio
-    y, sr = load_and_resample_mono(params)
     profiling_chunk_duration = params.get("audio_visualization", {}).get(
         "profiling_chunk_duration", 60
     )
-    samples_per_chunk = int(sr * profiling_chunk_duration)
+
+    y, sr = load_and_resample_mono(params)
+    print(y)
+
+    samples_per_chunk = int(target_sr * profiling_chunk_duration)
     global_max_power = 0
     # Process each chunk
     for i in tqdm(range(0, len(y), samples_per_chunk)):
         y_chunk = y[i : i + samples_per_chunk]
-        S = librosa.feature.melspectrogram(
+        s = librosa.feature.melspectrogram(
             y=y_chunk,
-            sr=sr,
+            sr=target_sr,
             n_fft=n_fft,
             hop_length=hop_length,
             n_mels=n_mels,
             fmin=f_low,
             fmax=f_high,
         )
-        maxpower = np.max(S)
+        maxpower = np.max(s)
         # print(f"profiling chunk max power : {maxpower}")
         global_max_power = max(global_max_power, maxpower)
 
     return {
         "max_power": float(global_max_power),
         "sample_count": len(y),
-        "sample_rate": sr,
+        "sample_rate": target_sr,
     }
 
 
@@ -288,7 +307,9 @@ def generate_spectrograms(
     # If duration is not provided (None), calculate it
     if duration is None:
         # Calculate the remaining duration of the audio file from start_time
-        audio_file_duration = librosa.get_duration(path=audio_fsp, sr=params.sr)
+        audio_file_duration = librosa.get_duration(
+            path=audio_fsp, sr=target_sample_rate
+        )
         print(f"audio_file_duration : {audio_file_duration}")
         duration = audio_file_duration - start_time
         # Ensure calculated duration is not negative
@@ -306,14 +327,15 @@ def generate_spectrograms(
     while current_position_secs < total_duration_secs:
         # print(f'{current_position_secs} / {total_duration_secs}')
 
+        # the last chunk can be samller so...
         duration_secs = min(
             y_chunk_samples / target_sample_rate,
             total_duration_secs - current_position_secs,
         )
 
-        y, sr = load_and_resample_mono(params)
+        y, sr = load_and_resample_mono(params, current_position_secs, duration_secs)
 
-        S = librosa.feature.melspectrogram(
+        s = librosa.feature.melspectrogram(
             y=y,
             sr=sr,
             n_fft=n_fft,
@@ -329,8 +351,8 @@ def generate_spectrograms(
         # print(f' f_low : { f_low }')
         # print(f' f_high: { f_high }')
 
-        S_dB = librosa.power_to_db(
-            S,
+        s_db = librosa.power_to_db(
+            s,
             ref=max_power,
             amin=10 ** (db_low / 10.0),
             top_db=db_high - db_low,
@@ -347,7 +369,7 @@ def generate_spectrograms(
 
         plt.figure(figsize=(image_width / 100, video.get("height", 100) / 100))
         librosa.display.specshow(
-            S_dB,
+            s_db,
             sr=sr,
             cmap=audiovis.get("cmap", "magma"),
             hop_length=hop_length,
@@ -839,7 +861,6 @@ def main():
     if project_json_path.exists():
         print("Using existing project file")
         project = Params(file_path=project_json_path, file_type="json")
-        print(project)
     else:
         default_project_structure = {
             "project_path": str(project_path),
@@ -859,7 +880,10 @@ def main():
     maxpower = project["audio_metadata"].get("max_power", None)
     sample_rate = project["audio_metadata"].get("sample_rate", None)
     sample_count = project["audio_metadata"].get("sample_count", None)
-    if any(value is None for value in [maxpower, sample_rate, sample_count]):
+    if (
+        any(value is None for value in [maxpower, sample_rate, sample_count])
+        or args.overwrite
+    ):
         # This block executes if any of maxpower, sample_rate, or sample_count is None
         profile = profile_audio(params)  #
         print(f"Profile : {profile}")
@@ -867,13 +891,10 @@ def main():
 
     project.save_to_json(str(project_json_path))
     print(f"project data : {project}")
-    ### PASS 2
-    # Generate the spectrograms
+
     generate_spectrograms(params, project)
 
     render_project_to_mp4(params, project)
-
-    # process_audio(config, args)
 
 
 if __name__ == "__main__":
