@@ -640,7 +640,7 @@ def apply_overlays(params: Params, global_frame_count: int, cropped_frame_rgba: 
             cropped_frame_rgba, playhead_overlay_rgba
         )
 
-    if params.overlays["labels"].get("enabled", None):
+    if params.overlays.get("labels", {}).get("enabled", None):
         # create overlay
         label_overlay = create_labels_overlay(
             params,

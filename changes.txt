@@ -1,0 +1,14 @@
+Change my mind on some features
+
+- Added Project Path to argparse and config
+  If the folder is not specified, generated files will be dumped in cwd
+  If is specified but does not exist - error, exit
+
+- removed --dated
+  good for testing but not that useful.
+
+- code does not delete any files when --overwrite is used, but will allow overwriting.
+
+- renamed project_folder to project_path
+
+- switch to pathlib from os.path
