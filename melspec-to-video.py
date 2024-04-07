@@ -235,7 +235,7 @@ def profile_audio(params: Params) -> dict[str, Any]:
         "profiling_chunk_duration", 60
     )
 
-    y, sr = load_and_resample_mono(params)
+    y, _ = load_and_resample_mono(params)
     print(y)
 
     samples_per_chunk = int(target_sr * profiling_chunk_duration)
@@ -591,8 +591,8 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
         # cropping, streaming, encoding loop
         for i in range(num_frames):
             global_frame_count += 1
-            crop_start_x = int(i * step_px)
-            crop_end_x = int(crop_start_x + frame_width)
+            crop_start_x = round(i * step_px)
+            crop_end_x = round(crop_start_x + frame_width)
 
             cropped_frame = work_image.crop((crop_start_x, 0, crop_end_x, frame_height))
             cropped_frame_rgba = cropped_frame.convert("RGBA")
@@ -606,6 +606,18 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
                 # apply to frame
                 cropped_frame_rgba = Image.alpha_composite(
                     cropped_frame_rgba, playhead_overlay_rgba
+                )
+
+            if params.overlays["labels"].get("enabled", None):
+                # create overlay
+                label_overlay = create_labels_overlay(
+                    params,
+                    global_frame_count,
+                    cropped_frame_rgba.size,
+                )
+                # apply to frame
+                cropped_frame_rgba = Image.alpha_composite(
+                    cropped_frame_rgba, label_overlay
                 )
 
             if params.overlays["frequency_axis"].get("enabled", None):
@@ -652,12 +664,8 @@ def calculate_frequency_positions(
     f_low: float, f_high: float, freqs_of_interest: List[float], img_height: int
 ) -> List[Tuple[float, float]]:
     """
-    Calculate the vertical positions of given frequencies on a mel spectrogram image and returns
-    them along with the corresponding frequency if they fall within the image height.
-
-    The function calculates the positions by converting the frequency values to the mel scale,
-    determining their relative positions within the spectrogram's frequency range, and then mapping
-    these to pixel positions on the image.
+    Calculate the vertical positions of given frequencies on a mel spectrogram image. Frequencies
+    outside the specified range are mapped to either 0 or the maximum image height.
 
     Parameters:
     - f_low: The lowest frequency (in Hz) included in the spectrogram.
@@ -666,31 +674,27 @@ def calculate_frequency_positions(
     - img_height: The height of the spectrogram image in pixels.
 
     Returns:
-    - A list of tuples (y_position, frequency) for frequencies within the image height. Each tuple
-      contains the vertical position in the image (as a pixel value) and the corresponding frequency.
+    - A list of tuples (y_position, frequency) for all frequencies. Frequencies below f_low
+      are assigned a y_position of 0, and frequencies above f_high are assigned a y_position of img_height.
     """
+    import librosa  # Assuming librosa is used for the hz_to_mel conversion
+
     # Convert the low and high frequency bounds, as well as the frequencies of interest, into the mel scale.
-    # The mel scale is a perceptual scale of pitches judged by listeners to be equal in distance from one another.
     mel_low = librosa.hz_to_mel(f_low)
     mel_high = librosa.hz_to_mel(f_high)
     mels_of_interest = librosa.hz_to_mel(freqs_of_interest)
 
     # Calculate the relative position of each frequency of interest within the total mel range.
-    # This is a value between 0 and 1 indicating the position of the frequency within our defined range.
     relative_positions = (mels_of_interest - mel_low) / (mel_high - mel_low)
 
     # Convert these relative positions to actual y-axis positions on the spectrogram image.
-    # We invert the positions because in images, the y-axis is often inverted (0 at the top).
     y_positions = (1 - relative_positions) * img_height
 
-    # Pair each calculated position with its corresponding frequency, filtering out any frequencies that
-    # fall outside of the mel range (i.e., those that have a relative position less than 0 or greater than 1).
+    # Pair each calculated position with its corresponding frequency.
+    # Adjust positions for out-of-range frequencies to either 0 (top) or img_height (bottom).
     pos_freq_pairs = [
-        (pos, freq)
-        for pos, freq, rel_pos in zip(
-            y_positions, freqs_of_interest, relative_positions
-        )
-        if 0 <= rel_pos <= 1  # Ensure the frequency is within the spectrogram range
+        (max(0, min(pos, img_height)), freq)  # Clamp position within [0, img_height]
+        for pos, freq in zip(y_positions, freqs_of_interest)
     ]
 
     return pos_freq_pairs
@@ -759,6 +763,117 @@ def save_config(params: Params) -> bool:
     newfile = Path(params.saveconfig).resolve()
     params.save_to_yaml(str(newfile))
     return True
+
+
+def create_labels_overlay(
+    params: Params,
+    global_frame_index: int,
+    frame_size: Tuple[int, int],
+) -> Image:
+    """
+    Creates an overlay of labels on a transparent image based on the spectrogram parameters and frame data.
+
+    This function calculates the position and size of labels based on the current frame's time window and
+    draws them onto a transparent image to be overlayed onto the video frame.
+
+    Args:
+        params (Params): Configuration and parameters for the spectrogram.
+        project (Params): Project specific configuration, including audio metadata.
+        global_frame_index (int): The index of the current frame in the video.
+        frame_size (Tuple[int, int]): The width and height of the frame.
+
+    Returns:
+        Image: A PIL Image object with the drawn labels.
+    """
+
+    # Create a transparent image for labels
+    label_image = Image.new("RGBA", frame_size, (255, 0, 0, 0))
+    draw = ImageDraw.Draw(label_image)
+
+    # Calculate the duration of one pixel in the frame
+    time_per_pixel = params.audio_visualization["seconds_in_view"] / label_image.width
+
+    # Calculate the start and end time of the current frame
+    frame_start_secs = global_frame_index / params.video["frame_rate"]
+    frame_end_secs = frame_start_secs + params.audio_visualization["seconds_in_view"]
+
+    for label in params.overlays["labels"]["items"]:
+
+        # if time not specified assume all time
+        x_pos_ratio = label.get("x_pos_ratio", None)
+        time_range = label.get("time", [frame_start_secs, frame_end_secs])
+
+        frequency_range = label["freq"]
+        ink_color = tuple(label["rgba"])  # Ensure ink_color is a tuple
+
+        label_start_secs, label_end_secs = time_range
+
+        # Check if the label is within the current frame's time range
+        if frame_start_secs <= label_start_secs <= label_end_secs <= frame_end_secs:
+            # Calculate label positions
+            y_px_list = calculate_frequency_positions(
+                params.mel_spectrogram["f_low"],
+                params.mel_spectrogram["f_high"],
+                freqs_of_interest=frequency_range,
+                img_height=label_image.height,
+            )
+
+            # Convert time to pixel positions
+            if x_pos_ratio:
+                x0 = x1 = x_pos_ratio * label_image.width
+            else:
+                x0 = round((label_start_secs - frame_start_secs) / time_per_pixel)
+                x1 = round((label_end_secs - frame_start_secs) / time_per_pixel)
+            y0 = max(float(y_px_list[1][0]), 0)
+            y1 = min(float(y_px_list[0][0]), label_image.height)
+
+            text_x, text_y = x0, y0
+
+            if label["text"] == "trafic":
+                print(x0, y0)
+
+            # Draw label based on its type
+            match label["type"]:
+                case "box":
+                    draw.rectangle((x0, y0, x1, y1), outline=ink_color, width=1)
+                case "point":
+                    draw.ellipse(
+                        [x0, y0, x0 + 7.5, y0 + 7.5],
+                        outline=ink_color,
+                        width=1,
+                        fill=ink_color,
+                    )
+                case "brace":
+                    draw.line((x0, y0, x0, y1), fill=ink_color, width=1)  # vertical
+                    draw.line(
+                        (x0, y0, x0 + 10, y0), fill=ink_color, width=1
+                    )  # tick top
+                    draw.line(
+                        (x0, y1, x0 + 10, y1), fill=ink_color, width=1
+                    )  # tick bottom
+
+            # Drawing text
+            font = ImageFont.load_default()
+            left, top, right, bottom = font.getbbox(text=label["text"])
+            text_size_y = top - bottom
+            text_size_x = right - left
+
+            v_align = label.get("v_align", None)
+            match v_align:
+                case "top":
+                    text_y = y0
+                case "bottom":
+                    text_y = y1 - text_size_y
+                case _:  # default to middle of freq raange
+                    text_y = y0 + ((y1 - y0) / 2) + (text_size_y / 2)
+
+            draw.text(
+                (text_x - text_size_x - 10, text_y),
+                label["text"],
+                fill=ink_color,
+                font=font,
+            )
+    return label_image
 
 
 def main():

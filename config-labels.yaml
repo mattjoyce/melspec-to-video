@@ -1,0 +1,59 @@
+audio_visualization:
+  audio_visual_span: 1
+  cmap: magma
+  max_spectrogram_width: 6000
+  playhead_position: 0.25  # Centered horizontally
+  playhead_rgba: [255,255,255,192] # white, slightly transparent
+  playhead_width: 2 # Assuming pixels for thick
+  playhead_section_rgba : [0,0,0,0]
+  seconds_in_view: 45
+  profiling_chunk_duration: 60 
+mel_spectrogram:
+  db_high: 0
+  db_low: -70
+  f_high: 10000
+  f_low: 50
+  hop_length: 512
+  n_fft: 2048
+  n_mels: 400
+video:
+  frame_rate: 30
+  height: 200
+  width: 800
+overlays:
+  frequency_axis:
+    enabled : False
+    freq_hz : [100, 1000, 3000, 5000, 8000]
+    axis_position: 0.25  # Centered horizontally
+    axis_rgba: [255,255,255,192] # white, slightly transparent
+  playhead:
+    enabled : False
+    playhead_position: 0.5  # Centered horizontally
+    playhead_rgba: [255,255,255,192] # white, slightly transparent
+    playhead_width: 2 # Assuming pixels for thick
+    playhead_section_rgba : [0,0,0,0]
+
+  labels:
+    enabled: True
+    rgba: [255,255,255,192] # white, slightly transparent
+    items:
+      - type : brace
+        freq: [0, 200]
+        text: traffic
+        rgba: [255, 255, 255, 128]
+        x_pos_ratio : 0.5
+      - type : brace
+        freq: [8000, 8500]
+        text: insects
+        rgba: [255, 255, 255, 128]
+        x_pos_ratio : 0.5
+      - type : text 
+        time: [5, 10]
+        freq: [2000, 2500]
+        text: bar
+        rgba: [255, 255, 255, 128]
+      - type : box
+        time: [20, 30]
+        freq: [1000, 1500]
+        text: "1000, 1500"
+        rgba: [255, 255, 255, 128]    
