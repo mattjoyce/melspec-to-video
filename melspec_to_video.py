@@ -122,9 +122,6 @@ def load_and_resample_mono(
     - Tuple[np.ndarray, int]: A tuple containing the audio data as a numpy array and the sample rate as an integer.
     """
 
-    audio_fsp = params.input
-    sample_rate = params.get("sr", None)
-
     # Extract necessary parameters
     if not start_secs:
         start_secs = params.get("start_time", 0)
@@ -136,7 +133,7 @@ def load_and_resample_mono(
 
     # Determine the total duration of the audio file if duration is not explicitly provided
     if duration_secs is None:
-        total_duration = librosa.get_duration(path=audio_fsp)
+        total_duration = librosa.get_duration(path=params.input)
         duration_secs = total_duration - float(start_secs)
         # Ensure that the calculated duration is not negative
         duration_secs = max(duration_secs, 0)
@@ -144,8 +141,8 @@ def load_and_resample_mono(
 
     # Load and resample the specified audio segment
     y, sr = librosa.load(
-        path=audio_fsp,
-        sr=sample_rate,
+        path=params.input,
+        sr=params.sr,
         offset=start_secs,
         duration=duration_secs,
         mono=True,
@@ -242,23 +239,15 @@ def profile_audio(params: Params) -> dict[str, Any]:
     # Initialization and configuration extraction
     logging.info("PROFILING START")
 
-    audio_fsp = params.input
-    logging.info("Audio file in: %s", audio_fsp)
+    logging.info("Audio file in: %s", params.input)
 
-    target_sr = params.get("sr", None)
-    if not target_sr:
-        target_sr = librosa.get_samplerate(audio_fsp)
-    logging.info("Target Sample Rate: %s", target_sr)
-    params["sr"] = target_sr
+    if not params.sr:
+        params.sr = librosa.get_samplerate(params.input)
+
+    logging.info("Target Sample Rate: %s", params.sr)
 
     # Configuration for Mel spectrogram
     melspec = params.get("mel_spectrogram", {})
-
-    f_low = melspec.get("f_low", 0)
-    f_high = melspec.get("f_high", target_sr / 2)
-    hop_length = melspec.get("hop_length", 512)
-    n_fft = melspec.get("n_fft", 2048)
-    n_mels = melspec.get("n_mels", 100)
 
     print(f' f_low : { melspec["f_low"]}')
     print(f' f_high: { melspec["f_high"]}')
@@ -268,21 +257,20 @@ def profile_audio(params: Params) -> dict[str, Any]:
     )
 
     y, _ = load_and_resample_mono(params)
-    print(y)
 
-    samples_per_chunk = int(target_sr * profiling_chunk_duration)
+    samples_per_chunk = int(params.sr * profiling_chunk_duration)
     global_max_power = 0
     # Process each chunk
     for i in tqdm(range(0, len(y), samples_per_chunk)):
         y_chunk = y[i : i + samples_per_chunk]
         s = librosa.feature.melspectrogram(
             y=y_chunk,
-            sr=target_sr,
-            n_fft=n_fft,
-            hop_length=hop_length,
-            n_mels=n_mels,
-            fmin=f_low,
-            fmax=f_high,
+            sr=params.sr,
+            n_fft=melspec.get("n_fft", 2048),
+            hop_length=melspec.get("hop_length", 512),
+            n_mels=melspec.get("n_mels", 100),
+            fmin=melspec.get("f_low", 0),
+            fmax=melspec.get("f_high", params.sr / 2),
         )
         maxpower = np.max(s)
         # print(f"profiling chunk max power : {maxpower}")
@@ -291,7 +279,7 @@ def profile_audio(params: Params) -> dict[str, Any]:
     return {
         "max_power": float(global_max_power),
         "sample_count": len(y),
-        "sample_rate": target_sr,
+        "sample_rate": params.sr,
     }
 
 
@@ -302,25 +290,18 @@ def generate_spectrograms(
     """Function processes the audio, creates a series of wide Mel spectrogram PNG files."""
     logging.info("Spectrogram generation start")
     images_metadata = []  # each image will have an entry with it's metadata
-    audio_metadata = project["audio_metadata"]
+    audio_metadata = project.audio_metadata
     video = params.get("video", {})
     audiovis = params.get("audio_visualization", {})
 
     melspec = params.get("mel_spectrogram", {})
-    f_low = melspec.get("f_low", 0)
-    f_high = melspec.get("f_high", 22050)
-    hop_length = melspec.get("hop_length", 512)
-    n_fft = melspec.get("n_fft", 2048)
-    n_mels = melspec.get("n_mels", 100)
-    db_low = melspec.get("db_low", -70)
-    db_high = melspec.get("db_high", 0)
 
     max_spectrogram_width = audiovis.get("max_spectrogram_width", 1000)
     logging.info("max_spectrogram_width: %s", max_spectrogram_width)
 
     # Directly assign the target_sample_rate with a fallback to the project's sample_rate or 22050
     target_sample_rate = params.get(
-        "sr", project["audio_metadata"].get("sample_rate", 22050)
+        "sr", project.audio_metadata.get("sample_rate", 22050)
     )
 
     samples_per_pixel = (audiovis["seconds_in_view"] * target_sample_rate) / video[
@@ -369,18 +350,18 @@ def generate_spectrograms(
         s = librosa.feature.melspectrogram(
             y=y,
             sr=sr,
-            n_fft=n_fft,
-            hop_length=hop_length,
-            n_mels=n_mels,
-            fmin=f_low,
-            fmax=f_high,
+            n_fft=melspec.get("n_fft", 2048),
+            hop_length=melspec.get("hop_length", 512),
+            n_mels=melspec.get("n_mels", 100),
+            fmin=melspec.get("f_low", 0),
+            fmax=melspec.get("f_high", params.sr / 2),
         )
 
         s_db = librosa.power_to_db(
             s,
             ref=audio_metadata.get("max_power", np.max(s)),
-            amin=10 ** (db_low / 10.0),
-            top_db=db_high - db_low,
+            amin=10 ** (melspec.get("db_low", -70) / 10.0),
+            top_db=melspec.get("db_high", 0) - melspec.get("db_low", -70),
         )
 
         if (
@@ -397,16 +378,16 @@ def generate_spectrograms(
             s_db,
             sr=sr,
             cmap=audiovis.get("cmap", "magma"),
-            hop_length=hop_length,
-            fmin=f_low,
-            fmax=f_high,
+            hop_length=melspec.get("hop_length", 512),
+            fmin=melspec.get("f_low", 0),
+            fmax=melspec.get("f_high", params.sr / 2),
         )
         plt.axis("off")
         plt.tight_layout(pad=0)
 
         basename = Path(audio_metadata["source_audio_path"]).stem
         image_filename = f"{basename}-{count:04d}.png"
-        image_path = Path(project["project_path"]) / image_filename
+        image_path = Path(project.project_path) / image_filename
 
         if allow_save(image_path, params.get("overwrite", None)):
             plt.savefig(
@@ -432,9 +413,9 @@ def generate_spectrograms(
         progress_bar.update(duration_secs)
         count += 1
     progress_bar.close()
-    project["images_metadata"] = images_metadata
+    project.images_metadata = images_metadata
     print(project)
-    project.save_to_json(project["project_file"])
+    project.save_to_json(project.project_file)
 
     return True
 
@@ -443,7 +424,7 @@ def get_ffmpeg_cmd(params: Params, project: Params) -> List[str]:
     """Function to select the best ffmpeg command line arguments"""
 
     # localise some variable we will use frequently
-    video_fsp = Path(project["project_path"]) / params.output
+    video_fsp = Path(project.project_path) / params.output
     print(video_fsp)
 
     # geometry of resulting mp4
@@ -519,7 +500,7 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
     """
     logging.info("MP4 Encoding start")
     # localise some variable we will use frequently
-    video_fsp = Path(project["project_path"]) / params.output
+    video_fsp = Path(project.project_path) / params.output
     print(video_fsp)
 
     # geometry of resulting mp4
@@ -533,13 +514,15 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
     seconds_in_view: Final = params.audio_visualization["seconds_in_view"]
 
     # get the ffmpeg command line parameter for gpu, or cpu
-    ffmpeg_cmd = get_ffmpeg_cmd(params, project)
-    print(ffmpeg_cmd)
+    print(get_ffmpeg_cmd(params, project))
 
     # create the encoder pipe so we can stream the frames
-    with open(Path(project["project_path"]) / "ffmpeg_log.txt", "wb") as log_file:
+    with open(Path(project.project_path) / "ffmpeg_log.txt", "wb") as log_file:
         with subprocess.Popen(
-            ffmpeg_cmd, stdin=subprocess.PIPE, stdout=log_file, stderr=subprocess.STDOUT
+            get_ffmpeg_cmd(params, project),
+            stdin=subprocess.PIPE,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
         ) as ffmpeg_process:
 
             ## Image Loop
@@ -558,18 +541,20 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
                 is_last = True if i == total_images - 1 else False
 
                 print(f"Image number {i+1} of {total_images}")
-                image_metadata = project["images_metadata"][i]
+                image_metadata = project.images_metadata[i]
                 filename = image_metadata["filename"]
                 print(filename)
-                start_time = image_metadata["start_time"]
-                end_time = image_metadata["end_time"]
 
                 # duration of audio the spectrogram image represents
-                image_duration = end_time - start_time
+                image_duration = (
+                    image_metadata["end_time"] - image_metadata["start_time"]
+                )
                 print(f"image_duration : {image_duration}")
 
                 # retrieve the image
-                spectrogram_image = Image.open(Path(project["project_path"]) / filename)
+                spectrogram_image: Final = Image.open(
+                    Path(project.project_path) / filename
+                )
 
                 # the number of frames we need to render the spectrograms
                 num_frames = int(image_duration * frame_rate)
@@ -608,10 +593,9 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
                 # as we are using a sliding window crop, at the end of the image, we spillover
                 # into the next image, so we just append one whole frame width from the next
                 if i < total_images - 1:
-                    next_image_metadata = project["images_metadata"][i + 1]
-                    next_filename = next_image_metadata["filename"]
+                    next_image_metadata = project.images_metadata[i + 1]
                     next_image = Image.open(
-                        Path(project["project_path"]) / next_filename
+                        Path(project.project_path) / next_image_metadata["filename"]
                     )
                     # Assume frame_width is the width of the frame to append from the next image
                     next_image_section = next_image.crop(
@@ -630,39 +614,9 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
                     )
                     cropped_frame_rgba = cropped_frame.convert("RGBA")
 
-                    ### Insert frame overlays
-                    if params.overlays["playhead"].get("enabled", None):
-                        # create overlay
-                        playhead_overlay_rgba = create_playhead_overlay(
-                            params, global_frame_count, cropped_frame_rgba.size
-                        )
-                        # apply to frame
-                        cropped_frame_rgba = Image.alpha_composite(
-                            cropped_frame_rgba, playhead_overlay_rgba
-                        )
-
-                    if params.overlays["labels"].get("enabled", None):
-                        # create overlay
-                        label_overlay = create_labels_overlay(
-                            params,
-                            global_frame_count,
-                            cropped_frame_rgba.size,
-                        )
-                        # apply to frame
-                        cropped_frame_rgba = Image.alpha_composite(
-                            cropped_frame_rgba, label_overlay
-                        )
-
-                    if params.overlays["frequency_axis"].get("enabled", None):
-                        # create overlay
-                        axis_overlay = create_vertical_axis(
-                            params,
-                            cropped_frame_rgba.size,
-                        )
-                        # apply to frame
-                        cropped_frame_rgba = Image.alpha_composite(
-                            cropped_frame_rgba, axis_overlay
-                        )
+                    cropped_frame_rgba = apply_overlays(
+                        params, global_frame_count, cropped_frame_rgba
+                    )
 
                     # Convert the image to bytes
                     final_frame_rgb = cropped_frame_rgba.convert("RGB")
@@ -672,6 +626,40 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
                     ffmpeg_process.stdin.write(final_frame_bytes)
 
     return True
+
+
+def apply_overlays(params: Params, global_frame_count: int, cropped_frame_rgba: Image):
+    """apply the overlays to the cropped frame and return resulting image"""
+    if params.overlays["playhead"].get("enabled", None):
+        # create overlay
+        playhead_overlay_rgba = create_playhead_overlay(
+            params, global_frame_count, cropped_frame_rgba.size
+        )
+        # apply to frame
+        cropped_frame_rgba = Image.alpha_composite(
+            cropped_frame_rgba, playhead_overlay_rgba
+        )
+
+    if params.overlays["labels"].get("enabled", None):
+        # create overlay
+        label_overlay = create_labels_overlay(
+            params,
+            global_frame_count,
+            cropped_frame_rgba.size,
+        )
+        # apply to frame
+        cropped_frame_rgba = Image.alpha_composite(cropped_frame_rgba, label_overlay)
+
+    if params.overlays["frequency_axis"].get("enabled", None):
+        # create overlay
+        axis_overlay = create_vertical_axis_overlay(
+            params,
+            cropped_frame_rgba.size,
+        )
+        # apply to frame
+        cropped_frame_rgba = Image.alpha_composite(cropped_frame_rgba, axis_overlay)
+
+    return cropped_frame_rgba
 
 
 def concatenate_images(image1, image2):
@@ -725,7 +713,7 @@ def calculate_frequency_positions(
     return pos_freq_pairs
 
 
-def create_vertical_axis(
+def create_vertical_axis_overlay(
     params: Params,
     image_size,
 ):
@@ -1015,11 +1003,11 @@ def main():
         }
         project = Params(default_config=default_project_structure)
 
-    project["audio_metadata"]["source_audio_path"] = str(source_audio_path)
+    project.audio_metadata["source_audio_path"] = str(source_audio_path)
 
-    maxpower = project["audio_metadata"].get("max_power", None)
-    sample_rate = project["audio_metadata"].get("sample_rate", None)
-    sample_count = project["audio_metadata"].get("sample_count", None)
+    maxpower = project.audio_metadata.get("max_power", None)
+    sample_rate = project.audio_metadata.get("sample_rate", None)
+    sample_count = project.audio_metadata.get("sample_count", None)
     if (
         any(value is None for value in [maxpower, sample_rate, sample_count])
         or args.overwrite
@@ -1027,7 +1015,7 @@ def main():
         # This block executes if any of maxpower, sample_rate, or sample_count is None
         profile = profile_audio(params)  #
         print(f"Profile : {profile}")
-        project["audio_metadata"].update(profile)
+        project.audio_metadata.update(profile)
 
     project.save_to_json(str(project_json_path))
     print(f"project data : {project}")
