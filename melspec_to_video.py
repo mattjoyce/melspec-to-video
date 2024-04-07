@@ -5,7 +5,7 @@ import logging
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Final, List, Tuple
+from typing import Any, Final, List, Tuple, cast, Optional
 
 import librosa
 import librosa.display
@@ -32,17 +32,44 @@ from params import Params
 
 # Features include:
 # - Loading and processing of audio data in configurable chunks.
-# - Generation of Mel spectrograms from audio data, with optional normalization against a global max power level.
+# - Generation of Mel spectrograms from audio data, with optional normalization
+#   against a global max power level.
 # - Customizable spectrogram color mapping.
 # - Efficient video encoding using FFmpeg, with parameters for quality and compatibility.
 
-# Designed for flexibility and efficiency, this tool is suited for researchers, musicians, bioaucoustic field recordists, and audiovisual artists looking to create detailed and customized visualizations of audio data.
+# Designed for flexibility and efficiency
+# this tool is suited for researchers, musicians, bioaucoustic field recordists,
+# and audiovisual artists looking to create detailed and customized visualizations of audio data.
 
 
 # Setup basic logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
+
+def get_color(color_value: Any) -> tuple[int, int, int, int]:
+    """
+    Converts a color value to a tuple of integers (RGBA format).
+
+    Args:
+    color_value (Any): The color information, expected to be a list of integers
+                       in RGBA format, but can be any type due to dynamic data sources.
+
+    Returns:
+    tuple[int, int, int, int]: The color as an RGBA tuple.
+    """
+    # Ensure the color_value is a list of integers; provide a default if not
+    if isinstance(color_value, List) and all(
+        isinstance(item, int) for item in color_value
+    ):
+        rgba_color = tuple(color_value)
+    else:
+        # Default color (white with some transparency)
+        rgba_color = (255, 255, 255, 192)
+
+    # Use cast to inform mypy about the expected return type explicitly
+    return cast(tuple[int, int, int, int], rgba_color)
 
 
 def allow_save(fullfilepath: Path, allowoverwrite: bool) -> bool:
@@ -61,8 +88,9 @@ def allow_save(fullfilepath: Path, allowoverwrite: bool) -> bool:
         # If overwriting is not allowed, print an error and exit
         if not allowoverwrite:
             print(
-                f"Error: File '{fullfilepath}' exists and overwriting is not allowed.  use --overwrite"
+                f"Error: File '{fullfilepath}' exists and overwriting is not allowed."
             )
+            print("use --overwrite")
             sys.exit(1)  # Exit the program with an error code
         # If overwriting is allowed
         else:
@@ -75,7 +103,9 @@ def allow_save(fullfilepath: Path, allowoverwrite: bool) -> bool:
 
 
 def load_and_resample_mono(
-    params: Params, start_secs: int = None, duration_secs: int = None
+    params: Params,
+    start_secs: Optional[float] = float(0),
+    duration_secs: Optional[float] = None,
 ) -> Tuple[np.ndarray, int]:
     """
     Load a segment of an audio file, resample it to a specified sample rate, and ensure it is mono.
@@ -107,7 +137,7 @@ def load_and_resample_mono(
     # Determine the total duration of the audio file if duration is not explicitly provided
     if duration_secs is None:
         total_duration = librosa.get_duration(path=audio_fsp)
-        duration_secs = total_duration - start_secs
+        duration_secs = total_duration - float(start_secs)
         # Ensure that the calculated duration is not negative
         duration_secs = max(duration_secs, 0)
         print(f"Duration calculated: {duration_secs}")
@@ -138,10 +168,10 @@ def create_playhead_overlay(
     Returns:
         Image: An RGBA Image object representing the overlay with the semi-transparent playhead line.
     """
-    frame_rate = params.video.get("frame_rate", 30)
     playhead = params.overlays["playhead"]
-    playhead_position = playhead.get("playhead_position", 0.5)
-    playhead_rgba = tuple(playhead.get("playhead_rgba", [255, 255, 255, 192]))
+
+    # convert list to pillow color
+    playhead_rgba = get_color(playhead.get("playhead_rgba", [255, 255, 255, 192]))
 
     playhead_width = playhead.get("playhead_width", 2)
     image_width, image_height = image_size
@@ -151,7 +181,7 @@ def create_playhead_overlay(
     draw = ImageDraw.Draw(overlay)
 
     # Calculate the x position of the playhead line
-    playhead_x = int(playhead_position * image_width)
+    playhead_x = int(playhead.get("playhead_position", 0.5) * image_width)
 
     # Draw the semi-transparent playhead line on the overlay
     draw.line(
@@ -161,7 +191,7 @@ def create_playhead_overlay(
     )
 
     # Calculate the time at the playhead position
-    total_seconds = frame_number / frame_rate
+    total_seconds = frame_number / params.video.get("frame_rate", 30)
     hours, remainder = divmod(total_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
 
@@ -185,7 +215,9 @@ def adjust_spectrogram_for_playhead(
     playhead = params.overlays["playhead"]
     playhead_position = playhead.get("playhead_position", 0.5)
     print(f"playhead : {playhead_position}")
-    playhead_section_rgba = tuple(playhead.get("playhead_section_rgba", [0, 0, 0, 0]))
+    playhead_section_rgba = get_color(
+        playhead.get("playhead_section_rgba", [0, 0, 0, 0])
+    )
     if is_first:
         lead_in_width = int(frame_width * playhead_position)
         lead_in_section = Image.new(
@@ -271,8 +303,6 @@ def generate_spectrograms(
     logging.info("Spectrogram generation start")
     images_metadata = []  # each image will have an entry with it's metadata
     audio_metadata = project["audio_metadata"]
-    max_power = audio_metadata.get("max_power")
-    audio_fsp = audio_metadata["source_audio_path"]
     video = params.get("video", {})
     audiovis = params.get("audio_visualization", {})
 
@@ -288,9 +318,10 @@ def generate_spectrograms(
     max_spectrogram_width = audiovis.get("max_spectrogram_width", 1000)
     logging.info("max_spectrogram_width: %s", max_spectrogram_width)
 
-    target_sample_rate = params.get("sr", None)
-    if not target_sample_rate:
-        target_sample_rate = project["audio_metadata"].get("sample_rate", 22050)
+    # Directly assign the target_sample_rate with a fallback to the project's sample_rate or 22050
+    target_sample_rate = params.get(
+        "sr", project["audio_metadata"].get("sample_rate", 22050)
+    )
 
     samples_per_pixel = (audiovis["seconds_in_view"] * target_sample_rate) / video[
         "width"
@@ -308,7 +339,7 @@ def generate_spectrograms(
     if duration is None:
         # Calculate the remaining duration of the audio file from start_time
         audio_file_duration = librosa.get_duration(
-            path=audio_fsp, sr=target_sample_rate
+            path=audio_metadata["source_audio_path"], sr=target_sample_rate
         )
         print(f"audio_file_duration : {audio_file_duration}")
         duration = audio_file_duration - start_time
@@ -345,15 +376,9 @@ def generate_spectrograms(
             fmax=f_high,
         )
 
-        # print(f'max power : { max_power }')
-        # print(f' db_low : { db_low }')
-        # print(f' db_high: { db_high }')
-        # print(f' f_low : { f_low }')
-        # print(f' f_high: { f_high }')
-
         s_db = librosa.power_to_db(
             s,
-            ref=max_power,
+            ref=audio_metadata.get("max_power", np.max(s)),
             amin=10 ** (db_low / 10.0),
             top_db=db_high - db_low,
         )
@@ -677,8 +702,6 @@ def calculate_frequency_positions(
     - A list of tuples (y_position, frequency) for all frequencies. Frequencies below f_low
       are assigned a y_position of 0, and frequencies above f_high are assigned a y_position of img_height.
     """
-    import librosa  # Assuming librosa is used for the hz_to_mel conversion
-
     # Convert the low and high frequency bounds, as well as the frequencies of interest, into the mel scale.
     mel_low = librosa.hz_to_mel(f_low)
     mel_high = librosa.hz_to_mel(f_high)
@@ -721,7 +744,7 @@ def create_vertical_axis(
     width, height = image_size
     axis = params.overlays.get("frequency_axis")
     x_pos = width * axis["axis_position"]
-    ink_color = tuple(axis["axis_rgba"][:3])
+    ink_color = get_color(axis["axis_rgba"])
     melspec = params.mel_spectrogram
 
     # Create a transparent image
@@ -804,7 +827,7 @@ def create_labels_overlay(
         time_range = label.get("time", [frame_start_secs, frame_end_secs])
 
         frequency_range = label["freq"]
-        ink_color = tuple(label["rgba"])  # Ensure ink_color is a tuple
+        ink_color = get_color(label["rgba"])  # Ensure ink_color is a tuple
 
         label_start_secs, label_end_secs = time_range
 
