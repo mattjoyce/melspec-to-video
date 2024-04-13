@@ -5,8 +5,9 @@ import logging
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Final, List, Tuple, cast, Optional
+from typing import Any, Final, List, Optional, Tuple, cast
 
+import click
 import librosa
 import librosa.display
 import matplotlib.pyplot as plt
@@ -41,11 +42,35 @@ from params import Params
 # this tool is suited for researchers, musicians, bioaucoustic field recordists,
 # and audiovisual artists looking to create detailed and customized visualizations of audio data.
 
-
 # Setup basic logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
+
+
+def create_default_project() -> dict[str, any]:
+    """
+    Creates a default project structure with None values for its fields.
+
+    Returns:
+        dict[str, any]: A dictionary representing the default structure of a project
+                        with paths, audio metadata, and images metadata initialized to None or empty.
+    """
+    return {
+        "project_path": None,
+        "project_file": None,
+        "audio_metadata": {
+            "source_audio_path": None,
+            "max_power": None,
+            "sample_rate": None,
+            "sample_count": None,
+            "duration": None,
+        },
+        "images_metadata": [],
+    }
+
+
 
 
 def get_color(color_value: Any) -> tuple[int, int, int, int]:
@@ -233,54 +258,6 @@ def adjust_spectrogram_for_playhead(
 
     return image
 
-
-def profile_audio(params: Params) -> dict[str, Any]:
-    """Function to derive the global max power reference from an audio file."""
-    # Initialization and configuration extraction
-    logging.info("PROFILING START")
-
-    logging.info("Audio file in: %s", params.input)
-
-    if not params.sr:
-        params.sr = librosa.get_samplerate(params.input)
-
-    logging.info("Target Sample Rate: %s", params.sr)
-
-    # Configuration for Mel spectrogram
-    melspec = params.get("mel_spectrogram", {})
-
-    print(f' f_low : { melspec["f_low"]}')
-    print(f' f_high: { melspec["f_high"]}')
-
-    profiling_chunk_duration = params.get("audio_visualization", {}).get(
-        "profiling_chunk_duration", 60
-    )
-
-    y, _ = load_and_resample_mono(params)
-
-    samples_per_chunk = int(params.sr * profiling_chunk_duration)
-    global_max_power = 0
-    # Process each chunk
-    for i in tqdm(range(0, len(y), samples_per_chunk)):
-        y_chunk = y[i : i + samples_per_chunk]
-        s = librosa.feature.melspectrogram(
-            y=y_chunk,
-            sr=params.sr,
-            n_fft=melspec.get("n_fft", 2048),
-            hop_length=melspec.get("hop_length", 512),
-            n_mels=melspec.get("n_mels", 100),
-            fmin=melspec.get("f_low", 0),
-            fmax=melspec.get("f_high", params.sr / 2),
-        )
-        maxpower = np.max(s)
-        # print(f"profiling chunk max power : {maxpower}")
-        global_max_power = max(global_max_power, maxpower)
-
-    return {
-        "max_power": float(global_max_power),
-        "sample_count": len(y),
-        "sample_rate": params.sr,
-    }
 
 
 def generate_spectrograms(
@@ -889,141 +866,303 @@ def create_labels_overlay(
     return label_image
 
 
+
 def main():
-    """process command line argument and config"""
-    parser = argparse.ArgumentParser(
-        description="Generate a scrolling spectrogram video from an audio file."
-    )
+    # """process command line argument and config"""
+    # parser = argparse.ArgumentParser(
+    #     description="Generate a scrolling spectrogram video from an audio file."
+    # )
 
-    parser.add_argument(
-        "-c", "--config", required=True, help="Configuration file path."
-    )
+    # parser.add_argument(
+    #     "-c", "--config", required=True, help="Configuration file path."
+    # )
 
-    parser.add_argument("--start", type=float, default=0, help="Start time in seconds")
-    parser.add_argument(
-        "--duration", type=float, default=None, help="Duration to process in seconds"
-    )
+    # parser.add_argument("--start", type=float, default=0, help="Start time in seconds")
+    # parser.add_argument(
+    #     "--duration", type=float, default=None, help="Duration to process in seconds"
+    # )
 
-    parser.add_argument(
-        "--sr",
-        help="Audio sample rate. Overrides the source sample rate.",
-        type=int,
-        default=None,
-    )
+    # parser.add_argument(
+    #     "--sr",
+    #     help="Audio sample rate. Overrides the source sample rate.",
+    #     type=int,
+    #     default=None,
+    # )
 
-    parser.add_argument(
-        "--cpu",
-        help="use CPU for processing if GPU is not available.",
-        action="store_true",
-        default=None,
-    )
+    # parser.add_argument(
+    #     "--cpu",
+    #     help="use CPU for processing if GPU is not available.",
+    #     action="store_true",
+    #     default=None,
+    # )
 
-    parser.add_argument("-in", "--input", required=True, help="Input audio file path.")
+    # parser.add_argument("-in", "--input", required=True, help="Input audio file path.")
 
-    parser.add_argument(
-        "-out",
-        "--output",
-        required=False,
-        help='Output video file path. Default: "output.mp4".',
-        default="output.mp4",
-    )
+    # parser.add_argument(
+    #     "-out",
+    #     "--output",
+    #     required=False,
+    #     help='Output video file path. Default: "output.mp4".',
+    #     default="output.mp4",
+    # )
 
-    # we default bool args to None, so they are falsy but not == False
-    # if it was False the defautl behavioir or argparse, it would always overwrite config yaml
+    # # we default bool args to None, so they are falsy but not == False
+    # # if it was False the defautl behavioir or argparse, it would always overwrite config yaml
 
-    parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        default=None,
-    )
+    # parser.add_argument(
+    #     "--overwrite",
+    #     action="store_true",
+    #     default=None,
+    # )
 
-    parser.add_argument(
-        "-p",
-        "--path",
-        help="Path to project folder, if ommited, current folder will be used.",
-        default=None,
-    )
+    # parser.add_argument(
+    #     "-p",
+    #     "--path",
+    #     help="Path to project folder, if ommited, current folder will be used.",
+    #     default=None,
+    # )
 
-    parser.add_argument(
-        "--saveconfig",
-        help="Combine args with config and save.",
-        default=None,
-    )
+    # parser.add_argument(
+    #     "--saveconfig",
+    #     help="Combine args with config and save.",
+    #     default=None,
+    # )
 
-    args = parser.parse_args()
-    params = Params(args.config, args=args, file_type="yaml")
+    # args = parser.parse_args()
+    # params = Params(args.config, args=args, file_type="yaml")
 
-    # resolve all paths and check as needed
-    config_path = Path(args.config).resolve()
-    if not config_path.exists():
-        logging.error("Config does not exist : %s", config_path)
-        sys.exit()
+    # project=resolve_paths_init_project(params)
+
+    # # # Set the project file path based on the resolved project path and update the project instance
+    # # project_json_path = Path(params.path) / "project.json"
+    # # logging.info("Project file : %s", project_json_path)
+
+    # # if project_json_path.exists():
+    # #     logging.info("Using existing project file")
+    # #     project = Params(file_path=project_json_path, file_type="json")
+    # # else:
+    # #     default_project_structure = {
+    # #         "project_path": params.path,
+    # #         "project_file": str(project_json_path),
+    # #         "audio_metadata": {
+    # #             "source_audio_path": params.input,
+    # #             "max_power": None,
+    # #             "sample_rate": None,
+    # #             "sample_count": None,
+    # #         },
+    # #         "images_metadata": [],
+    # #     }
+    # #     project = Params(default_config=default_project_structure)
+
+    # # project.audio_metadata["source_audio_path"] = params.input
+
+    # # maxpower = project.audio_metadata.get("max_power", None)
+    # # sample_rate = project.audio_metadata.get("sample_rate", None)
+    # # sample_count = project.audio_metadata.get("sample_count", None)
+    # # if (
+    # #     any(value is None for value in [maxpower, sample_rate, sample_count])
+    # #     or args.overwrite
+    # # ):
+    # #     # This block executes if any of maxpower, sample_rate, or sample_count is None
+    # #     print(f"Profile : {profile}")
+    # #     project.audio_metadata.update(profile)
+
+    # # project.save_to_json(str(project_json_path))
+    # # print(f"project data : {project}")
+    
+    
+    # profile_audio(params, project)
+    # generate_spectrograms(params, project)
+    # render_project_to_mp4(params, project)
+    pass
+
+
+
+@click.group()
+@click.option('--config', 'config_path', type=click.Path(), required=True, help='Path to the configuration file.')
+@click.pass_context
+def cli(ctx, config_path):
+    """Your CLI application."""
+    logging.info("CLI initialized with config: %s", config_path)
+    # Initialize Params with the config file path provided via command-line options
+    initial_config = Params(file_path=config_path, file_type='yaml')
+    # Then, initialize your application context with this configuration
+    ctx.obj = initial_config
+
+@cli.command()
+@click.pass_context
+def info(ctx):
+    """Pretty prints the configuration."""
+    config = ctx.obj
+    # Assuming you have a method to pretty print or you can directly print if it's a dictionary
+    print("Configuration:")
+    # This assumes your Params or Context class has a way to return the configuration
+    # as a dictionary or a string for pretty printing. Adjust based on your implementation.
+    print(config)  # Adjust this line based on how your config data is structured
+
+
+@cli.command()
+@click.option('--input', 'input_path', type=click.Path(exists=True), required=True, help='Path to source audio file.')
+@click.option('--path', 'project_path', type=click.Path(exists=True), required=True, help='Directory to save project data.')
+@click.option('--project_file', 'project_file', type=click.Path(), default="project.json", required=False, help='File to save project data.')
+@click.option('--sr', 'sample_rate', type=int, help='Sample rate to use.')
+@click.option('--force', is_flag=True, default=False, help='Always rerun the analysis')
+@click.option('--start', default='0', callback=lambda ctx, param, value: parse_time(value),
+              help="Start time in n, nn:nn, or nn:nn:nn format.")
+@click.option('--duration', default=None, callback=lambda ctx, param, value: parse_time(value) if value is not None else None,
+              help="Duration in n, nn:nn, or nn:nn:nn format.")
+@click.pass_context
+def profile(ctx, input_path, project_path, project_file, sample_rate, start, duration, force):
+    """Function to derive the global max power reference from an audio file."""
+    # Initialization and configuration extraction
+    params = ctx.obj
+
+    # check existing project or create a default structure
+    project_full_path=Path(project_path) / project_file
+    if Path(project_full_path).exists():
+        project=Params(file_path=project_full_path, file_type='json')
+        logging.info("Project loaded : %s",project_full_path)
+        print(project)
     else:
-        print(f"Config file : {config_path}")
+        default_project=create_default_project()
+        project=Params(default_config=default_project)
+        logging.info("Project created")
+        print(project)
+   
+    if any(
+        value is None
+        for value in [
+            project['audio_metadata'].get("max_power",{}),
+            project['audio_metadata'].get("sample_rate",{}),
+            project['audio_metadata'].get("sample_count",{}),
+        ]
+    ) or force or params.get('force',{}):
+        logging.info("PROFILING START")
 
-    source_audio_path = Path(args.input).resolve()
-    if not source_audio_path.exists():
-        logging.error("Input does not exist : %s", source_audio_path)
-        sys.exit()
+        project.project_path = project_path
+        logging.info("Project Path : %s", project.project_path)
+
+        project.project_file = project_file
+        logging.info("Project File : %s", project.project_file)
+
+        project.audio_metadata["source_audio_path"] = input_path
+        params.input = input_path
+        logging.info("Source Audio : %s", input_path)
+
+        # Initialize target_sr
+        target_sr = None
+        actual_sr = librosa.get_samplerate(path=input_path)
+
+        # First priority: CLI input
+        if sample_rate is not None:
+            target_sr = sample_rate
+        # Second priority: Config params
+        elif params.get('sr') is not None:
+            target_sr = params['sr']
+        # Third priority: Sample rate from the audio file
+        else:
+            target_sr = actual_sr
+
+
+        # Assign the determined sample rate back to params
+        params['sr'] = target_sr
+        project['audio_metadata']['sample_rate']=actual_sr
+
+        logging.info("Target Sample Rate: %s", target_sr)
+
+        # Configuration for Mel spectrogram
+        melspec = params.get("mel_spectrogram", {})
+
+        print(f' f_low : { melspec["f_low"]}')
+        print(f' f_high: { melspec["f_high"]}')
+
+        profiling_chunk_duration = params.get("audio_visualization", {}).get(
+            "profiling_chunk_duration", 60
+        )
+
+
+        duration=validate_times(start_time=start, duration=duration, audio_length=librosa.get_duration(path=input_path))
+
+        y, _ = load_and_resample_mono(params, start_secs=start, duration_secs=duration)
+
+        samples_per_chunk = int(params.sr * profiling_chunk_duration)
+        global_max_power = 0
+        # Process each chunk
+        for i in tqdm(range(0, len(y), samples_per_chunk)):
+            y_chunk = y[i : i + samples_per_chunk]
+            s = librosa.feature.melspectrogram(
+                y=y_chunk,
+                sr=params.sr,
+                n_fft=melspec.get("n_fft", 2048),
+                hop_length=melspec.get("hop_length", 512),
+                n_mels=melspec.get("n_mels", 100),
+                fmin=melspec.get("f_low", 0),
+                fmax=melspec.get("f_high", params.sr / 2),
+            )
+            max_power = np.max(s)
+            # print(f"profiling chunk max power : {max_power}")
+            global_max_power = max(global_max_power, max_power)
+
+        project.audio_metadata["max_power"] = float(global_max_power)
+        project.audio_metadata["sample_count"] = len(y)
+        project.audio_metadata["analysis_start_secs"] = start
+        project.audio_metadata["analysis_duration_secs"] = duration       
+        project.audio_metadata["total_duration_secs"] = librosa.get_duration(
+            path=project.audio_metadata["source_audio_path"]
+        )
+        project.save_to_json(file_path=Path(project_path) / project_file)
+
+    return True
+
+
+def parse_time(time_str: str) -> int:
+    """Converts a time string in various formats to seconds.
+
+    Args:
+        time_str (str): Time in one of the formats 'n', 'nn:nn', or 'nn:nn:nn'.
+
+    Returns:
+        int: Time in seconds.
+
+    Raises:
+        ValueError: If the time format is invalid.
+    """
+    string_parts = time_str.split(':')  # Clearly a list of strings.
+    parts = [int(p) for p in string_parts]  # Convert parts to integers, clearly transitioning types.
+    if len(parts) == 1:
+        return parts[0]
+    elif len(parts) == 2:
+        return parts[0] * 60 + parts[1]
+    elif len(parts) == 3:
+        return parts[0] * 3600 + parts[1] * 60 + parts[2]
     else:
-        print(f"Source Audio Path : {source_audio_path}")
+        raise ValueError("Invalid time format")
 
-    if args.saveconfig:
-        save_config(params)
-    print(params)
+def validate_times(start_time: int, duration: Optional[int], audio_length: float) -> int:
+    """Validates and adjusts start and duration times based on audio length.
 
-    ## Project Data
-    if args.path:
-        project_path = Path(args.path).resolve()
-        if not project_path.exists():
-            logging.error("Project folder does not exist : %s", project_path)
-            sys.exit()
-    else:
-        project_path = Path.cwd().resolve()
-    print(f"Project path : {project_path}")
+    Args:
+        start_time (int): The starting time in seconds.
+        duration (Optional[int]): The duration in seconds.
+        audio_length (float): Total length of the audio file in seconds.
 
-    project_json_path = Path(project_path) / "project.json"
-    print(f"Project file : {project_json_path}")
-    print(project_json_path)
+    Returns:
+        int: Adjusted duration in seconds.
 
-    if project_json_path.exists():
-        print("Using existing project file")
-        project = Params(file_path=project_json_path, file_type="json")
-    else:
-        default_project_structure = {
-            "project_path": str(project_path),
-            "project_file": str(project_json_path),
-            "audio_metadata": {
-                "source_audio_path": str(source_audio_path),
-                "max_power": None,
-                "sample_rate": None,
-                "sample_count": None,
-            },
-            "images_metadata": [],
-        }
-        project = Params(default_config=default_project_structure)
-
-    project.audio_metadata["source_audio_path"] = str(source_audio_path)
-
-    maxpower = project.audio_metadata.get("max_power", None)
-    sample_rate = project.audio_metadata.get("sample_rate", None)
-    sample_count = project.audio_metadata.get("sample_count", None)
-    if (
-        any(value is None for value in [maxpower, sample_rate, sample_count])
-        or args.overwrite
-    ):
-        # This block executes if any of maxpower, sample_rate, or sample_count is None
-        profile = profile_audio(params)  #
-        print(f"Profile : {profile}")
-        project.audio_metadata.update(profile)
-
-    project.save_to_json(str(project_json_path))
-    print(f"project data : {project}")
-
-    generate_spectrograms(params, project)
-
-    render_project_to_mp4(params, project)
-
+    Raises:
+        click.ClickException: If start time is greater than the audio length.
+    """
+    if start_time >= audio_length:
+        raise click.ClickException(f"Start time {start_time} exceeds the audio file length of {audio_length} seconds.")
+    
+    if duration is None:
+        duration = int(audio_length - start_time)
+        click.echo("Duration not provided; assuming duration covers the rest of the audio from the start time.")
+    elif start_time + duration > audio_length:
+        duration = int(audio_length - start_time)
+        click.echo(f"Provided duration extends beyond audio length. Adjusting to {duration} seconds.")
+    
+    return duration
 
 if __name__ == "__main__":
-    main()
+    cli()

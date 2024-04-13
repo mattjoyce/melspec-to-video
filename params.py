@@ -137,11 +137,18 @@ class Params:
                 f"JSON configuration file not found at {config_path}"
             ) from e
 
-    def overlay_args(self, args: argparse.Namespace):
+    def overlay_args(self, args):
         """Overlays command-line arguments onto the existing configuration."""
-        for key, value in vars(args).items():
-            if value is not None:
-                self._config[key] = value
+        if isinstance(args, dict):
+            # Assuming args is a dictionary of command-line options from Click
+            for key, value in args.items():
+                if value is not None:
+                    self._config[key] = value
+        else:
+            # Assuming args is an argparse.Namespace
+            for key, value in vars(args).items():
+                if value is not None:
+                    self._config[key] = value
 
     def __getitem__(self, key: str) -> Any:
         """Allows for dict-like retrieval of configuration values."""
