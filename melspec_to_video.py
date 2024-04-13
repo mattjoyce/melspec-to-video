@@ -260,141 +260,6 @@ def adjust_spectrogram_for_playhead(
 
 
 
-def generate_spectrograms(
-    params: Params,
-    project: Params,
-) -> bool:
-    """Function processes the audio, creates a series of wide Mel spectrogram PNG files."""
-    logging.info("Spectrogram generation start")
-    images_metadata = []  # each image will have an entry with it's metadata
-    audio_metadata = project.audio_metadata
-    video = params.get("video", {})
-    audiovis = params.get("audio_visualization", {})
-
-    melspec = params.get("mel_spectrogram", {})
-
-    max_spectrogram_width = audiovis.get("max_spectrogram_width", 1000)
-    logging.info("max_spectrogram_width: %s", max_spectrogram_width)
-
-    # Directly assign the target_sample_rate with a fallback to the project's sample_rate or 22050
-    target_sample_rate = params.get(
-        "sr", project.audio_metadata.get("sample_rate", 22050)
-    )
-
-    samples_per_pixel = (audiovis["seconds_in_view"] * target_sample_rate) / video[
-        "width"
-    ]
-    y_chunk_samples = int(samples_per_pixel * max_spectrogram_width)
-    logging.info("y_chunk_samples: %d ", y_chunk_samples)
-
-    full_chunk_duration_secs = y_chunk_samples / target_sample_rate
-    start_time = params.get("start", 0)  # Safely get start_time with a default of 0
-    print(f"start_time : {start_time}")
-    duration = params.get(
-        "duration", None
-    )  # Safely get duration with a default of None
-    # If duration is not provided (None), calculate it
-    if duration is None:
-        # Calculate the remaining duration of the audio file from start_time
-        audio_file_duration = librosa.get_duration(
-            path=audio_metadata["source_audio_path"], sr=target_sample_rate
-        )
-        print(f"audio_file_duration : {audio_file_duration}")
-        duration = audio_file_duration - start_time
-        # Ensure calculated duration is not negative
-        duration = max(duration, 0)
-    print(f"duration : {duration}")
-
-    # Adjusted to consider the effective processing duration
-    total_duration_secs = duration
-    print(f"total_duration_secs : {total_duration_secs}")
-
-    current_position_secs = 0
-
-    count = 0
-    progress_bar = tqdm(total=total_duration_secs)
-    while current_position_secs < total_duration_secs:
-        # print(f'{current_position_secs} / {total_duration_secs}')
-
-        # the last chunk can be samller so...
-        duration_secs = min(
-            y_chunk_samples / target_sample_rate,
-            total_duration_secs - current_position_secs,
-        )
-
-        y, sr = load_and_resample_mono(params, current_position_secs, duration_secs)
-
-        s = librosa.feature.melspectrogram(
-            y=y,
-            sr=sr,
-            n_fft=melspec.get("n_fft", 2048),
-            hop_length=melspec.get("hop_length", 512),
-            n_mels=melspec.get("n_mels", 100),
-            fmin=melspec.get("f_low", 0),
-            fmax=melspec.get("f_high", params.sr / 2),
-        )
-
-        s_db = librosa.power_to_db(
-            s,
-            ref=audio_metadata.get("max_power", np.max(s)),
-            amin=10 ** (melspec.get("db_low", -70) / 10.0),
-            top_db=melspec.get("db_high", 0) - melspec.get("db_low", -70),
-        )
-
-        if (
-            duration_secs < full_chunk_duration_secs
-        ):  # Adjust for potentially shorter last chunk
-            image_width = int(
-                max_spectrogram_width * (duration_secs / full_chunk_duration_secs)
-            )
-        else:
-            image_width = max_spectrogram_width
-
-        plt.figure(figsize=(image_width / 100, video.get("height", 100) / 100))
-        librosa.display.specshow(
-            s_db,
-            sr=sr,
-            cmap=audiovis.get("cmap", "magma"),
-            hop_length=melspec.get("hop_length", 512),
-            fmin=melspec.get("f_low", 0),
-            fmax=melspec.get("f_high", params.sr / 2),
-        )
-        plt.axis("off")
-        plt.tight_layout(pad=0)
-
-        basename = Path(audio_metadata["source_audio_path"]).stem
-        image_filename = f"{basename}-{count:04d}.png"
-        image_path = Path(project.project_path) / image_filename
-
-        if allow_save(image_path, params.get("overwrite", None)):
-            plt.savefig(
-                image_path,
-                bbox_inches="tight",
-                pad_inches=0,
-            )
-        plt.close()
-
-        # Save spectrogram and update project data with image metadata
-        # For each generated image, create its metadata entry
-        image_metadata = {
-            "filename": image_filename,
-            "start_time": current_position_secs,
-            "end_time": current_position_secs + duration_secs,
-            # Additional metadata can be included here
-        }
-        # Append this metadata to the project data
-        # Consider creating a function similar to update_project_data to handle this update
-        images_metadata.append(image_metadata)
-
-        current_position_secs += duration_secs
-        progress_bar.update(duration_secs)
-        count += 1
-    progress_bar.close()
-    project.images_metadata = images_metadata
-    print(project)
-    project.save_to_json(project.project_file)
-
-    return True
 
 
 def get_ffmpeg_cmd(params: Params, project: Params) -> List[str]:
@@ -1083,7 +948,9 @@ def profile(ctx, input_path, project_path, project_file, sample_rate, start, dur
 
         duration=validate_times(start_time=start, duration=duration, audio_length=librosa.get_duration(path=input_path))
 
-        y, _ = load_and_resample_mono(params, start_secs=start, duration_secs=duration)
+        y, _ = librosa.load(path=input_path, sr=target_sr, offset=start, duration=duration, mono=True)
+
+        #y, _ = load_and_resample_mono(params, start_secs=start, duration_secs=duration)
 
         samples_per_chunk = int(params.sr * profiling_chunk_duration)
         global_max_power = 0
@@ -1163,6 +1030,165 @@ def validate_times(start_time: int, duration: Optional[int], audio_length: float
         click.echo(f"Provided duration extends beyond audio length. Adjusting to {duration} seconds.")
     
     return duration
+
+@cli.command()
+@click.option('--path', 'project_path', type=click.Path(exists=True), required=True, help='Directory to save project data.')
+@click.option('--project_file', 'project_file', type=click.Path(), default="project.json", required=False, help='File to save project data.')
+@click.option('--sr', 'sample_rate', type=int, help='Sample rate to use.')
+@click.option('--start', default='0', callback=lambda ctx, param, value: parse_time(value),
+              help="Start time in n, nn:nn, or nn:nn:nn format.")
+@click.option('--duration', default=None, callback=lambda ctx, param, value: parse_time(value) if value is not None else None,
+              help="Duration in n, nn:nn, or nn:nn:nn format.")
+@click.option('--overwrite', is_flag=True, default=False, help='Overwrite existing spectrogram image files')
+@click.pass_context
+def spectrograms(ctx, project_path, project_file, sample_rate, start, duration, overwrite) -> bool:
+    """Function processes the audio, creates a series of wide Mel spectrogram PNG files."""
+    logging.info("Spectrogram generation start")
+    # Initialization and configuration extraction
+    params = ctx.obj
+    # check existing project or create a default structure
+    project_full_path=Path(project_path) / project_file
+    project=None
+    if Path(project_full_path).exists():
+        project=Params(file_path=project_full_path, file_type='json')
+        logging.info("Project loaded : %s",project_full_path)
+        print(project)
+    else:
+        logging.error("Project not found")
+        sys.exit()
+
+
+  
+
+
+    images_metadata = []  # each image will have an entry with it's metadata
+    video = params.get("video", {})
+    audiovis = params.get("audio_visualization", {})
+    melspec = params.get("mel_spectrogram", {})
+
+    input_path=project.audio_metadata.get("source_audio_path")
+
+    max_spectrogram_width = audiovis.get("max_spectrogram_width", 1000)
+    logging.info("max_spectrogram_width: %s", max_spectrogram_width)
+
+    # Initialize target_sr
+    target_sr = None
+    actual_sr = project.audio_metadata.get("sample_rate")
+    # First priority: CLI input
+    if sample_rate is not None:
+        target_sr = sample_rate
+    # Second priority: Config params
+    elif params.get('sr') is not None:
+        target_sr = params['sr']
+    # Third priority: Sample rate from the audio file
+    else:
+        target_sr = actual_sr
+
+    samples_per_pixel = (audiovis["seconds_in_view"] * target_sr) / video[
+        "width"
+    ]
+    y_chunk_samples = int(samples_per_pixel * max_spectrogram_width)
+    logging.info("y_chunk_samples: %d ", y_chunk_samples)
+
+    full_chunk_duration_secs = y_chunk_samples / target_sr
+    duration=validate_times(start_time=start, duration=duration, audio_length=librosa.get_duration(path=input_path))
+
+    print(f"duration : {duration}")
+
+    # Adjusted to consider the effective processing duration
+    total_duration_secs = duration
+    print(f"total_duration_secs : {total_duration_secs}")
+
+    current_position_secs = 0
+
+    count = 0
+    progress_bar = tqdm(total=total_duration_secs)
+    while current_position_secs < total_duration_secs:
+        # print(f'{current_position_secs} / {total_duration_secs}')
+
+        # the last chunk can be samller so...
+        duration_secs = min(
+            y_chunk_samples / target_sr,
+            total_duration_secs - current_position_secs,
+        )
+
+        y, _ = librosa.load(path=input_path, sr=target_sr, offset=start, duration=duration, mono=True)
+
+        #y, sr = load_and_resample_mono(params, current_position_secs, duration_secs)
+
+        s = librosa.feature.melspectrogram(
+            y=y,
+            sr=target_sr,
+            n_fft=melspec.get("n_fft", 2048),
+            hop_length=melspec.get("hop_length", 512),
+            n_mels=melspec.get("n_mels", 100),
+            fmin=melspec.get("f_low", 0),
+            fmax=melspec.get("f_high", target_sr / 2),
+        )
+
+        s_db = librosa.power_to_db(
+            s,
+            ref=project.audio_metadata.get("max_power", np.max(s)),
+            amin=10 ** (melspec.get("db_low", -70) / 10.0),
+            top_db=melspec.get("db_high", 0) - melspec.get("db_low", -70),
+        )
+
+        if (
+            duration_secs < full_chunk_duration_secs
+        ):  # Adjust for potentially shorter last chunk
+            image_width = int(
+                max_spectrogram_width * (duration_secs / full_chunk_duration_secs)
+            )
+        else:
+            image_width = max_spectrogram_width
+
+        plt.figure(figsize=(image_width / 100, video.get("height", 100) / 100))
+        librosa.display.specshow(
+            s_db,
+            sr=target_sr,
+            cmap=audiovis.get("cmap", "magma"),
+            hop_length=melspec.get("hop_length", 512),
+            fmin=melspec.get("f_low", 0),
+            fmax=melspec.get("f_high", target_sr / 2),
+        )
+        plt.axis("off")
+        plt.tight_layout(pad=0)
+
+        basename = Path(input_path).stem
+        image_filename = f"{basename}-{count:04d}.png"
+        image_path = Path(project.project_path) / image_filename
+
+        if allow_save(image_path, overwrite):
+            plt.savefig(
+                image_path,
+                bbox_inches="tight",
+                pad_inches=0,
+            )
+        plt.close()
+
+        # Save spectrogram and update project data with image metadata
+        # For each generated image, create its metadata entry
+        image_metadata = {
+            "filename": image_filename,
+            "start_time": current_position_secs,
+            "end_time": current_position_secs + duration_secs,
+            # Additional metadata can be included here
+        }
+        # Append this metadata to the project data
+        # Consider creating a function similar to update_project_data to handle this update
+        images_metadata.append(image_metadata)
+
+        current_position_secs += duration_secs
+        progress_bar.update(duration_secs)
+        count += 1
+    progress_bar.close()
+    project.images_metadata = images_metadata
+    print(project)
+    project.save_to_json(project.project_file)
+
+    return True
+
+
 
 if __name__ == "__main__":
     cli()
