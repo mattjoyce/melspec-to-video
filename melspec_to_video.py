@@ -1,6 +1,5 @@
 """ Module to analyse audio, and make videos from spectrograms."""
 
-import argparse
 import logging
 import subprocess
 import sys
@@ -48,6 +47,23 @@ logging.basicConfig(
 )
 
 
+@click.group()
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(),
+    required=True,
+    help="Path to the configuration file.",
+)
+@click.pass_context
+def cli(ctx, config_path):
+    """Your CLI application."""
+    logging.info("CLI initialized with config: %s", config_path)
+    # Initialize Params with the config file path provided via command-line options
+    initial_config = Params(file_path=config_path, file_type="yaml")
+    # Then, initialize your application context with this configuration
+    ctx.obj = initial_config
+
 
 def create_default_project() -> dict[str, any]:
     """
@@ -55,7 +71,8 @@ def create_default_project() -> dict[str, any]:
 
     Returns:
         dict[str, any]: A dictionary representing the default structure of a project
-                        with paths, audio metadata, and images metadata initialized to None or empty.
+                        with paths, audio metadata, and images metadata initialized
+                        to None or empty.
     """
     return {
         "project_path": None,
@@ -65,12 +82,9 @@ def create_default_project() -> dict[str, any]:
             "max_power": None,
             "sample_rate": None,
             "sample_count": None,
-            "duration": None,
         },
         "images_metadata": [],
     }
-
-
 
 
 def get_color(color_value: Any) -> tuple[int, int, int, int]:
@@ -127,68 +141,22 @@ def allow_save(fullfilepath: Path, allowoverwrite: bool) -> bool:
     return False  # This line is technically redundant due to the sys.exit above
 
 
-def load_and_resample_mono(
-    params: Params,
-    start_secs: Optional[float] = float(0),
-    duration_secs: Optional[float] = None,
-) -> Tuple[np.ndarray, int]:
-    """
-    Load a segment of an audio file, resample it to a specified sample rate, and ensure it is mono.
-
-    This function uses the librosa library to load and resample audio. It allows for specifying
-    a start time and duration for loading only a part of the audio file, which is useful for large files
-    or specific analysis of audio segments.
-
-    Parameters:
-    - params (Params): Configuration parameters containing the audio file path, sample rate,
-                       start time, and duration for the segment to be loaded and resampled.
-
-    Returns:
-    - Tuple[np.ndarray, int]: A tuple containing the audio data as a numpy array and the sample rate as an integer.
-    """
-
-    # Extract necessary parameters
-    if not start_secs:
-        start_secs = params.get("start_time", 0)
-        print(f"Start not specificied, using cli or 0 : {start_secs}")
-
-    if not duration_secs:
-        duration_secs = params.get("duration", None)
-        print(f"Duration not specificied, using cli or None: {duration_secs}")
-
-    # Determine the total duration of the audio file if duration is not explicitly provided
-    if duration_secs is None:
-        total_duration = librosa.get_duration(path=params.input)
-        duration_secs = total_duration - float(start_secs)
-        # Ensure that the calculated duration is not negative
-        duration_secs = max(duration_secs, 0)
-        print(f"Duration calculated: {duration_secs}")
-
-    # Load and resample the specified audio segment
-    y, sr = librosa.load(
-        path=params.input,
-        sr=params.sr,
-        offset=start_secs,
-        duration=duration_secs,
-        mono=True,
-    )
-
-    return y, int(sr)
-
-
 def create_playhead_overlay(
     params: Params, frame_number: int, image_size: Tuple[int, int]
 ):
     """
-    Create an overlay image with a semi-transparent playhead line indicating the current playback position.
+    Create an overlay image with a semi-transparent playhead line
+    indicating the current playback position.
 
     Args:
-        params (Params): A Params object containing video and audio visualization configurations.
+        params (Params): A Params object containing video
+        and audio visualization configurations.
         frame_number (int): The current frame number in the video sequence.
         image_size (Tuple[int, int]): The size of the overlay image (width, height).
 
     Returns:
-        Image: An RGBA Image object representing the overlay with the semi-transparent playhead line.
+        Image: An RGBA Image object representing the overlay with
+        the semi-transparent playhead line.
     """
     playhead = params.overlays["playhead"]
 
@@ -214,11 +182,13 @@ def create_playhead_overlay(
 
     # Calculate the time at the playhead position
     total_seconds = frame_number / params.video.get("frame_rate", 30)
-    hours, remainder = divmod(total_seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
+    hours, remainder = divmod(int(total_seconds), 3600)
+    minutes, seconds_fraction = divmod(remainder, 60)
+    seconds = int(seconds_fraction)
+    milliseconds = int((seconds_fraction - seconds) * 10)
 
     # Format the time mark as text
-    time_mark = f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}.{int((seconds - int(seconds)) * 10)}"
+    time_mark = f"{hours:02d}:{minutes:02d}:{seconds:02d}.{milliseconds:01d}"
 
     # Draw the time mark text near the playhead line
     font = ImageFont.load_default()
@@ -259,9 +229,6 @@ def adjust_spectrogram_for_playhead(
     return image
 
 
-
-
-
 def get_ffmpeg_cmd(params: Params, project: Params) -> List[str]:
     """Function to select the best ffmpeg command line arguments"""
 
@@ -294,7 +261,7 @@ def get_ffmpeg_cmd(params: Params, project: Params) -> List[str]:
         "-crf",
         "17",  # Adjust CRF as needed for balance between quality and file size
         "-preset",
-        "fast",  # Preset for encoding speed/quality trade-off (options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow)
+        "fast",  # ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
         "-vf",
         "format=yuv420p",  # Pixel format for compatibility
         f"{video_fsp}",
@@ -337,7 +304,8 @@ def get_ffmpeg_cmd(params: Params, project: Params) -> List[str]:
 def render_project_to_mp4(params: Params, project: Params) -> bool:
     """Function to produce MP$ video from a spectrogram
 
-    This approach uses a sliding window crop to sample the spectrogram images, and feed to ffmpeg to encode.
+    This approach uses a sliding window crop to sample the spectrogram images,
+    then pipes the image to ffmpeg to encode.
 
     """
     logging.info("MP4 Encoding start")
@@ -379,8 +347,8 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
             # step through each spectrograph image
             for i in range(total_images):
                 # first and last may need treatment
-                is_first = True if i == 0 else False
-                is_last = True if i == total_images - 1 else False
+                is_first = i == 0
+                is_last = i == total_images - 1
 
                 print(f"Image number {i+1} of {total_images}")
                 image_metadata = project.images_metadata[i]
@@ -521,8 +489,8 @@ def calculate_frequency_positions(
     f_low: float, f_high: float, freqs_of_interest: List[float], img_height: int
 ) -> List[Tuple[float, float]]:
     """
-    Calculate the vertical positions of given frequencies on a mel spectrogram image. Frequencies
-    outside the specified range are mapped to either 0 or the maximum image height.
+    Calculate the vertical positions of given frequencies on a mel spectrogram image.
+    Frequencies outside the specified range are mapped to either 0 or the maximum image height.
 
     Parameters:
     - f_low: The lowest frequency (in Hz) included in the spectrogram.
@@ -531,10 +499,11 @@ def calculate_frequency_positions(
     - img_height: The height of the spectrogram image in pixels.
 
     Returns:
-    - A list of tuples (y_position, frequency) for all frequencies. Frequencies below f_low
-      are assigned a y_position of 0, and frequencies above f_high are assigned a y_position of img_height.
+    - A list of tuples (y_position, frequency) for all frequencies.
+      Frequencies below f_low are assigned a y_position of 0, and
+      frequencies above f_high are assigned a y_position of img_height.
     """
-    # Convert the low and high frequency bounds, as well as the frequencies of interest, into the mel scale.
+    # Convert the low and high frequencies to mel scale.
     mel_low = librosa.hz_to_mel(f_low)
     mel_high = librosa.hz_to_mel(f_high)
     mels_of_interest = librosa.hz_to_mel(freqs_of_interest)
@@ -612,6 +581,7 @@ def create_vertical_axis_overlay(
 
 
 def save_config(params: Params) -> bool:
+    """write config out to yaml file"""
     # setup some keys we want to exclude
     params.set_exclusions(["config", "saveconfig"])
     print(params.exclusions)
@@ -626,9 +596,11 @@ def create_labels_overlay(
     frame_size: Tuple[int, int],
 ) -> Image:
     """
-    Creates an overlay of labels on a transparent image based on the spectrogram parameters and frame data.
+    Creates an overlay of labels on a transparent image based on the spectrogram
+    parameters and frame data.
 
-    This function calculates the position and size of labels based on the current frame's time window and
+    This function calculates the position and size of labels based on the current frame's
+    time window and
     draws them onto a transparent image to be overlayed onto the video frame.
 
     Args:
@@ -731,129 +703,6 @@ def create_labels_overlay(
     return label_image
 
 
-
-def main():
-    # """process command line argument and config"""
-    # parser = argparse.ArgumentParser(
-    #     description="Generate a scrolling spectrogram video from an audio file."
-    # )
-
-    # parser.add_argument(
-    #     "-c", "--config", required=True, help="Configuration file path."
-    # )
-
-    # parser.add_argument("--start", type=float, default=0, help="Start time in seconds")
-    # parser.add_argument(
-    #     "--duration", type=float, default=None, help="Duration to process in seconds"
-    # )
-
-    # parser.add_argument(
-    #     "--sr",
-    #     help="Audio sample rate. Overrides the source sample rate.",
-    #     type=int,
-    #     default=None,
-    # )
-
-    # parser.add_argument(
-    #     "--cpu",
-    #     help="use CPU for processing if GPU is not available.",
-    #     action="store_true",
-    #     default=None,
-    # )
-
-    # parser.add_argument("-in", "--input", required=True, help="Input audio file path.")
-
-    # parser.add_argument(
-    #     "-out",
-    #     "--output",
-    #     required=False,
-    #     help='Output video file path. Default: "output.mp4".',
-    #     default="output.mp4",
-    # )
-
-    # # we default bool args to None, so they are falsy but not == False
-    # # if it was False the defautl behavioir or argparse, it would always overwrite config yaml
-
-    # parser.add_argument(
-    #     "--overwrite",
-    #     action="store_true",
-    #     default=None,
-    # )
-
-    # parser.add_argument(
-    #     "-p",
-    #     "--path",
-    #     help="Path to project folder, if ommited, current folder will be used.",
-    #     default=None,
-    # )
-
-    # parser.add_argument(
-    #     "--saveconfig",
-    #     help="Combine args with config and save.",
-    #     default=None,
-    # )
-
-    # args = parser.parse_args()
-    # params = Params(args.config, args=args, file_type="yaml")
-
-    # project=resolve_paths_init_project(params)
-
-    # # # Set the project file path based on the resolved project path and update the project instance
-    # # project_json_path = Path(params.path) / "project.json"
-    # # logging.info("Project file : %s", project_json_path)
-
-    # # if project_json_path.exists():
-    # #     logging.info("Using existing project file")
-    # #     project = Params(file_path=project_json_path, file_type="json")
-    # # else:
-    # #     default_project_structure = {
-    # #         "project_path": params.path,
-    # #         "project_file": str(project_json_path),
-    # #         "audio_metadata": {
-    # #             "source_audio_path": params.input,
-    # #             "max_power": None,
-    # #             "sample_rate": None,
-    # #             "sample_count": None,
-    # #         },
-    # #         "images_metadata": [],
-    # #     }
-    # #     project = Params(default_config=default_project_structure)
-
-    # # project.audio_metadata["source_audio_path"] = params.input
-
-    # # maxpower = project.audio_metadata.get("max_power", None)
-    # # sample_rate = project.audio_metadata.get("sample_rate", None)
-    # # sample_count = project.audio_metadata.get("sample_count", None)
-    # # if (
-    # #     any(value is None for value in [maxpower, sample_rate, sample_count])
-    # #     or args.overwrite
-    # # ):
-    # #     # This block executes if any of maxpower, sample_rate, or sample_count is None
-    # #     print(f"Profile : {profile}")
-    # #     project.audio_metadata.update(profile)
-
-    # # project.save_to_json(str(project_json_path))
-    # # print(f"project data : {project}")
-    
-    
-    # profile_audio(params, project)
-    # generate_spectrograms(params, project)
-    # render_project_to_mp4(params, project)
-    pass
-
-
-
-@click.group()
-@click.option('--config', 'config_path', type=click.Path(), required=True, help='Path to the configuration file.')
-@click.pass_context
-def cli(ctx, config_path):
-    """Your CLI application."""
-    logging.info("CLI initialized with config: %s", config_path)
-    # Initialize Params with the config file path provided via command-line options
-    initial_config = Params(file_path=config_path, file_type='yaml')
-    # Then, initialize your application context with this configuration
-    ctx.obj = initial_config
-
 @cli.command()
 @click.pass_context
 def info(ctx):
@@ -867,41 +716,74 @@ def info(ctx):
 
 
 @cli.command()
-@click.option('--input', 'input_path', type=click.Path(exists=True), required=True, help='Path to source audio file.')
-@click.option('--path', 'project_path', type=click.Path(exists=True), required=True, help='Directory to save project data.')
-@click.option('--project_file', 'project_file', type=click.Path(), default="project.json", required=False, help='File to save project data.')
-@click.option('--sr', 'sample_rate', type=int, help='Sample rate to use.')
-@click.option('--force', is_flag=True, default=False, help='Always rerun the analysis')
-@click.option('--start', default='0', callback=lambda ctx, param, value: parse_time(value),
-              help="Start time in n, nn:nn, or nn:nn:nn format.")
-@click.option('--duration', default=None, callback=lambda ctx, param, value: parse_time(value) if value is not None else None,
-              help="Duration in n, nn:nn, or nn:nn:nn format.")
+@click.option(
+    "--input",
+    "input_path",
+    type=click.Path(exists=True),
+    required=True,
+    help="Path to source audio file.",
+)
+@click.option(
+    "--path",
+    "project_path",
+    type=click.Path(exists=True),
+    required=True,
+    help="Directory to save project data.",
+)
+@click.option(
+    "--project_file",
+    "project_file",
+    type=click.Path(),
+    default="project.json",
+    required=False,
+    help="File to save project data.",
+)
+@click.option("--sr", "sample_rate", type=int, help="Sample rate to use.")
+@click.option("--force", is_flag=True, default=False, help="Always rerun the analysis")
+@click.option(
+    "--start",
+    default="0",
+    callback=lambda ctx, param, value: parse_time(value),
+    help="Start time in n, nn:nn, or nn:nn:nn format.",
+)
+@click.option(
+    "--duration",
+    default=None,
+    callback=lambda ctx, param, value: parse_time(value) if value is not None else None,
+    help="Duration in n, nn:nn, or nn:nn:nn format.",
+)
 @click.pass_context
-def profile(ctx, input_path, project_path, project_file, sample_rate, start, duration, force):
+def profile(
+    ctx, input_path, project_path, project_file, sample_rate, start, duration, force
+):
     """Function to derive the global max power reference from an audio file."""
     # Initialization and configuration extraction
     params = ctx.obj
 
     # check existing project or create a default structure
-    project_full_path=Path(project_path) / project_file
+    project_full_path = Path(project_path) / project_file
     if Path(project_full_path).exists():
-        project=Params(file_path=project_full_path, file_type='json')
-        logging.info("Project loaded : %s",project_full_path)
+        project = Params(file_path=project_full_path, file_type="json")
+        logging.info("Project loaded : %s", project_full_path)
         print(project)
     else:
-        default_project=create_default_project()
-        project=Params(default_config=default_project)
+        default_project = create_default_project()
+        project = Params(default_config=default_project)
         logging.info("Project created")
         print(project)
-   
-    if any(
-        value is None
-        for value in [
-            project['audio_metadata'].get("max_power",{}),
-            project['audio_metadata'].get("sample_rate",{}),
-            project['audio_metadata'].get("sample_count",{}),
-        ]
-    ) or force or params.get('force',{}):
+
+    if (
+        any(
+            value is None
+            for value in [
+                project["audio_metadata"].get("max_power", {}),
+                project["audio_metadata"].get("sample_rate", {}),
+                project["audio_metadata"].get("sample_count", {}),
+            ]
+        )
+        or force
+        or params.get("force", {})
+    ):
         logging.info("PROFILING START")
 
         project.project_path = project_path
@@ -922,16 +804,15 @@ def profile(ctx, input_path, project_path, project_file, sample_rate, start, dur
         if sample_rate is not None:
             target_sr = sample_rate
         # Second priority: Config params
-        elif params.get('sr') is not None:
-            target_sr = params['sr']
+        elif params.get("sr") is not None:
+            target_sr = params["sr"]
         # Third priority: Sample rate from the audio file
         else:
             target_sr = actual_sr
 
-
         # Assign the determined sample rate back to params
-        params['sr'] = target_sr
-        project['audio_metadata']['sample_rate']=actual_sr
+        params["sr"] = target_sr
+        project["audio_metadata"]["sample_rate"] = actual_sr
 
         logging.info("Target Sample Rate: %s", target_sr)
 
@@ -945,12 +826,17 @@ def profile(ctx, input_path, project_path, project_file, sample_rate, start, dur
             "profiling_chunk_duration", 60
         )
 
+        duration = validate_times(
+            start_time=start,
+            duration=duration,
+            audio_length=librosa.get_duration(path=input_path),
+        )
 
-        duration=validate_times(start_time=start, duration=duration, audio_length=librosa.get_duration(path=input_path))
+        y, _ = librosa.load(
+            path=input_path, sr=target_sr, offset=start, duration=duration, mono=True
+        )
 
-        y, _ = librosa.load(path=input_path, sr=target_sr, offset=start, duration=duration, mono=True)
-
-        #y, _ = load_and_resample_mono(params, start_secs=start, duration_secs=duration)
+        # y, _ = load_and_resample_mono(params, start_secs=start, duration_secs=duration)
 
         samples_per_chunk = int(params.sr * profiling_chunk_duration)
         global_max_power = 0
@@ -973,7 +859,7 @@ def profile(ctx, input_path, project_path, project_file, sample_rate, start, dur
         project.audio_metadata["max_power"] = float(global_max_power)
         project.audio_metadata["sample_count"] = len(y)
         project.audio_metadata["analysis_start_secs"] = start
-        project.audio_metadata["analysis_duration_secs"] = duration       
+        project.audio_metadata["analysis_duration_secs"] = duration
         project.audio_metadata["total_duration_secs"] = librosa.get_duration(
             path=project.audio_metadata["source_audio_path"]
         )
@@ -983,7 +869,8 @@ def profile(ctx, input_path, project_path, project_file, sample_rate, start, dur
 
 
 def parse_time(time_str: str) -> int:
-    """Converts a time string in various formats to seconds.
+    """
+    Converts a time string in various formats to seconds.
 
     Args:
         time_str (str): Time in one of the formats 'n', 'nn:nn', or 'nn:nn:nn'.
@@ -994,18 +881,22 @@ def parse_time(time_str: str) -> int:
     Raises:
         ValueError: If the time format is invalid.
     """
-    string_parts = time_str.split(':')  # Clearly a list of strings.
-    parts = [int(p) for p in string_parts]  # Convert parts to integers, clearly transitioning types.
-    if len(parts) == 1:
-        return parts[0]
-    elif len(parts) == 2:
-        return parts[0] * 60 + parts[1]
-    elif len(parts) == 3:
-        return parts[0] * 3600 + parts[1] * 60 + parts[2]
-    else:
-        raise ValueError("Invalid time format")
+    parts = [int(p) for p in time_str.split(":")]  # Convert parts to integers
 
-def validate_times(start_time: int, duration: Optional[int], audio_length: float) -> int:
+    match len(parts):
+        case 1:
+            return parts[0]
+        case 2:
+            return parts[0] * 60 + parts[1]
+        case 3:
+            return parts[0] * 3600 + parts[1] * 60 + parts[2]
+        case _:
+            raise ValueError("Invalid time format")
+
+
+def validate_times(
+    start_time: int, duration: Optional[int], audio_length: float
+) -> int:
     """Validates and adjusts start and duration times based on audio length.
 
     Args:
@@ -1020,53 +911,84 @@ def validate_times(start_time: int, duration: Optional[int], audio_length: float
         click.ClickException: If start time is greater than the audio length.
     """
     if start_time >= audio_length:
-        raise click.ClickException(f"Start time {start_time} exceeds the audio file length of {audio_length} seconds.")
-    
+        raise click.ClickException(
+            f"Start time {start_time} exceeds the audio file length of {audio_length} seconds."
+        )
+
     if duration is None:
         duration = int(audio_length - start_time)
-        click.echo("Duration not provided; assuming duration covers the rest of the audio from the start time.")
+        click.echo(
+            "Duration not provided; assuming duration is rest of the audio from the start time."
+        )
     elif start_time + duration > audio_length:
         duration = int(audio_length - start_time)
-        click.echo(f"Provided duration extends beyond audio length. Adjusting to {duration} seconds.")
-    
+        click.echo(
+            f"Provided duration extends beyond audio length. Adjusting to {duration} seconds."
+        )
+
     return duration
 
+
 @cli.command()
-@click.option('--path', 'project_path', type=click.Path(exists=True), required=True, help='Directory to save project data.')
-@click.option('--project_file', 'project_file', type=click.Path(), default="project.json", required=False, help='File to save project data.')
-@click.option('--sr', 'sample_rate', type=int, help='Sample rate to use.')
-@click.option('--start', default='0', callback=lambda ctx, param, value: parse_time(value),
-              help="Start time in n, nn:nn, or nn:nn:nn format.")
-@click.option('--duration', default=None, callback=lambda ctx, param, value: parse_time(value) if value is not None else None,
-              help="Duration in n, nn:nn, or nn:nn:nn format.")
-@click.option('--overwrite', is_flag=True, default=False, help='Overwrite existing spectrogram image files')
+@click.option(
+    "--path",
+    "project_path",
+    type=click.Path(exists=True),
+    required=True,
+    help="Directory to save project data.",
+)
+@click.option(
+    "--project_file",
+    "project_file",
+    type=click.Path(),
+    default="project.json",
+    required=False,
+    help="File to save project data.",
+)
+@click.option("--sr", "sample_rate", type=int, help="Sample rate to use.")
+@click.option(
+    "--start",
+    default="0",
+    callback=lambda ctx, param, value: parse_time(value),
+    help="Start time in n, nn:nn, or nn:nn:nn format.",
+)
+@click.option(
+    "--duration",
+    default=None,
+    callback=lambda ctx, param, value: parse_time(value) if value is not None else None,
+    help="Duration in n, nn:nn, or nn:nn:nn format.",
+)
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    default=False,
+    help="Overwrite existing spectrogram image files",
+)
 @click.pass_context
-def spectrograms(ctx, project_path, project_file, sample_rate, start, duration, overwrite) -> bool:
+def spectrograms(
+    ctx, project_path, project_file, sample_rate, start, duration, overwrite
+) -> bool:
     """Function processes the audio, creates a series of wide Mel spectrogram PNG files."""
     logging.info("Spectrogram generation start")
     # Initialization and configuration extraction
     params = ctx.obj
     # check existing project or create a default structure
-    project_full_path=Path(project_path) / project_file
-    project=None
+    project_full_path = Path(project_path) / project_file
+    project = None
     if Path(project_full_path).exists():
-        project=Params(file_path=project_full_path, file_type='json')
-        logging.info("Project loaded : %s",project_full_path)
+        project = Params(file_path=project_full_path, file_type="json")
+        logging.info("Project loaded : %s", project_full_path)
         print(project)
     else:
         logging.error("Project not found")
         sys.exit()
-
-
-  
-
 
     images_metadata = []  # each image will have an entry with it's metadata
     video = params.get("video", {})
     audiovis = params.get("audio_visualization", {})
     melspec = params.get("mel_spectrogram", {})
 
-    input_path=project.audio_metadata.get("source_audio_path")
+    input_path = project.audio_metadata.get("source_audio_path")
 
     max_spectrogram_width = audiovis.get("max_spectrogram_width", 1000)
     logging.info("max_spectrogram_width: %s", max_spectrogram_width)
@@ -1078,20 +1000,22 @@ def spectrograms(ctx, project_path, project_file, sample_rate, start, duration, 
     if sample_rate is not None:
         target_sr = sample_rate
     # Second priority: Config params
-    elif params.get('sr') is not None:
-        target_sr = params['sr']
+    elif params.get("sr") is not None:
+        target_sr = params["sr"]
     # Third priority: Sample rate from the audio file
     else:
         target_sr = actual_sr
 
-    samples_per_pixel = (audiovis["seconds_in_view"] * target_sr) / video[
-        "width"
-    ]
+    samples_per_pixel = (audiovis["seconds_in_view"] * target_sr) / video["width"]
     y_chunk_samples = int(samples_per_pixel * max_spectrogram_width)
     logging.info("y_chunk_samples: %d ", y_chunk_samples)
 
     full_chunk_duration_secs = y_chunk_samples / target_sr
-    duration=validate_times(start_time=start, duration=duration, audio_length=librosa.get_duration(path=input_path))
+    duration = validate_times(
+        start_time=start,
+        duration=duration,
+        audio_length=librosa.get_duration(path=input_path),
+    )
 
     print(f"duration : {duration}")
 
@@ -1112,9 +1036,11 @@ def spectrograms(ctx, project_path, project_file, sample_rate, start, duration, 
             total_duration_secs - current_position_secs,
         )
 
-        y, _ = librosa.load(path=input_path, sr=target_sr, offset=start, duration=duration, mono=True)
+        y, _ = librosa.load(
+            path=input_path, sr=target_sr, offset=start, duration=duration, mono=True
+        )
 
-        #y, sr = load_and_resample_mono(params, current_position_secs, duration_secs)
+        # y, sr = load_and_resample_mono(params, current_position_secs, duration_secs)
 
         s = librosa.feature.melspectrogram(
             y=y,
@@ -1189,6 +1115,7 @@ def spectrograms(ctx, project_path, project_file, sample_rate, start, duration, 
     return True
 
 
-
 if __name__ == "__main__":
+    # pylint: disable=no-value-for-parameter
+    # pylint not understanding click decorators
     cli()
