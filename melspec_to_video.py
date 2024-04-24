@@ -229,11 +229,9 @@ def adjust_spectrogram_for_playhead(
     return image
 
 
-def get_ffmpeg_cmd(params: Params, project: Params) -> List[str]:
+def get_ffmpeg_cmd(params: Params) -> List[str]:
     """Function to select the best ffmpeg command line arguments"""
-
-    # localise some variable we will use frequently
-    video_fsp = Path(project.project_path) / params.output
+    video_fsp = params.output_path
     print(video_fsp)
 
     # geometry of resulting mp4
@@ -301,7 +299,57 @@ def get_ffmpeg_cmd(params: Params, project: Params) -> List[str]:
     return ffmpeg_cmd
 
 
-def render_project_to_mp4(params: Params, project: Params) -> bool:
+@cli.command()
+@click.option(
+    "--path",
+    "project_path",
+    type=click.Path(exists=True),
+    required=True,
+    help="Directory to save project data.",
+)
+@click.option(
+    "--project_file",
+    "project_file",
+    type=click.Path(),
+    default="project.json",
+    required=False,
+    help="File to save project data.",
+)
+@click.option(
+    "--output",
+    "output_path",
+    default="output.mp4",
+    required=False,
+    help="File to save video to.",
+)
+# @click.option("--sr", "sample_rate", type=int, help="Sample rate to use.")
+@click.option(
+    "--start",
+    default="0",
+    callback=lambda ctx, param, value: parse_time(value),
+    help="Start time in n, nn:nn, or nn:nn:nn format.",
+)
+@click.option(
+    "--duration",
+    default=None,
+    callback=lambda ctx, param, value: parse_time(value) if value is not None else None,
+    help="Duration in n, nn:nn, or nn:nn:nn format.",
+)
+@click.option(
+    "--cpu",
+    is_flag=True,
+    help="Use CPU, if omitted, will try to use GPU.",
+)
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    default=False,
+    help="Overwrite existing spectrogram image files",
+)
+@click.pass_context
+def mp4(
+    ctx, project_path, project_file, output_path, start, duration, cpu, overwrite
+) -> bool:
     """Function to produce MP$ video from a spectrogram
 
     This approach uses a sliding window crop to sample the spectrogram images,
@@ -309,9 +357,25 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
 
     """
     logging.info("MP4 Encoding start")
-    # localise some variable we will use frequently
-    video_fsp = Path(project.project_path) / params.output
-    print(video_fsp)
+
+    # Initialization and configuration extraction
+    params = ctx.obj
+    # check existing project or stop
+    project_full_path = Path(project_path) / project_file
+    project = None
+    if Path(project_full_path).exists():
+        project = Params(file_path=project_full_path, file_type="json")
+        logging.info("Project loaded : %s", project_full_path)
+        print(project)
+    else:
+        logging.error("Project not found")
+        sys.exit()
+
+    # check cli, config or default
+    params["output_path"] = Path(project_path) / params.check_value(
+        "output_path", output_path, "output.mp4"
+    )
+    params["cpu"] = params.check_value("cpu", cpu, False)
 
     # geometry of resulting mp4
     frame_width: Final[int] = params.video.get("width", 800)
@@ -324,12 +388,12 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
     seconds_in_view: Final = params.audio_visualization["seconds_in_view"]
 
     # get the ffmpeg command line parameter for gpu, or cpu
-    print(get_ffmpeg_cmd(params, project))
+    print(f"ffmpeg cmd : {get_ffmpeg_cmd(params)}")
 
     # create the encoder pipe so we can stream the frames
-    with open(Path(project.project_path) / "ffmpeg_log.txt", "wb") as log_file:
+    with open(Path(project_path) / "ffmpeg_log.txt", "wb") as log_file:
         with subprocess.Popen(
-            get_ffmpeg_cmd(params, project),
+            get_ffmpeg_cmd(params),
             stdin=subprocess.PIPE,
             stdout=log_file,
             stderr=subprocess.STDOUT,
@@ -340,18 +404,19 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
 
             # counthe images in the metadata
             total_images = len(project.get("images_metadata", []))
+            print(total_images)
 
             # setup a global counmt, we use this to calculate time in overlay
             global_frame_count = 0
 
             # step through each spectrograph image
-            for i in range(total_images):
+            for image_file_index in range(total_images):
                 # first and last may need treatment
-                is_first = i == 0
-                is_last = i == total_images - 1
+                is_first = image_file_index == 0
+                is_last = image_file_index == total_images - 1
 
-                print(f"Image number {i+1} of {total_images}")
-                image_metadata = project.images_metadata[i]
+                print(f"Image number {image_file_index+1} of {total_images}")
+                image_metadata = project.images_metadata[image_file_index]
                 filename = image_metadata["filename"]
                 print(filename)
 
@@ -362,9 +427,7 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
                 print(f"image_duration : {image_duration}")
 
                 # retrieve the image
-                spectrogram_image: Final = Image.open(
-                    Path(project.project_path) / filename
-                )
+                spectrogram_image: Final = Image.open(Path(project_path) / filename)
 
                 # the number of frames we need to render the spectrograms
                 num_frames = int(image_duration * frame_rate)
@@ -402,10 +465,10 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
 
                 # as we are using a sliding window crop, at the end of the image, we spillover
                 # into the next image, so we just append one whole frame width from the next
-                if i < total_images - 1:
-                    next_image_metadata = project.images_metadata[i + 1]
+                if image_file_index < total_images - 1:
+                    next_image_metadata = project.images_metadata[image_file_index + 1]
                     next_image = Image.open(
-                        Path(project.project_path) / next_image_metadata["filename"]
+                        Path(project_path) / next_image_metadata["filename"]
                     )
                     # Assume frame_width is the width of the frame to append from the next image
                     next_image_section = next_image.crop(
@@ -414,9 +477,9 @@ def render_project_to_mp4(params: Params, project: Params) -> bool:
                     work_image = concatenate_images(work_image, next_image_section)
 
                 # cropping, streaming, encoding loop
-                for i in range(num_frames):
+                for frame_index in range(num_frames):
                     global_frame_count += 1
-                    crop_start_x = round(i * step_px)
+                    crop_start_x = round(frame_index * step_px)
                     crop_end_x = round(crop_start_x + frame_width)
 
                     cropped_frame = work_image.crop(
@@ -972,7 +1035,7 @@ def spectrograms(
     logging.info("Spectrogram generation start")
     # Initialization and configuration extraction
     params = ctx.obj
-    # check existing project or create a default structure
+    # check existing project or stop
     project_full_path = Path(project_path) / project_file
     project = None
     if Path(project_full_path).exists():
@@ -1110,7 +1173,7 @@ def spectrograms(
     progress_bar.close()
     project.images_metadata = images_metadata
     print(project)
-    project.save_to_json(project.project_file)
+    project.save_to_json(project_full_path)
 
     return True
 
