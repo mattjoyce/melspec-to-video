@@ -262,7 +262,6 @@ def get_ffmpeg_cmd(params: Params) -> List[str]:
         "fast",  # ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
         "-vf",
         "format=yuv420p",  # Pixel format for compatibility
-        f"{video_fsp}",
     ]
 
     ### Start the ffmpeg process
@@ -289,12 +288,14 @@ def get_ffmpeg_cmd(params: Params) -> List[str]:
         "slow",  # Preset for encoding speed
         "-vf",
         "format=yuv420p",  # Pixel format for compatibility
-        f"{video_fsp}",
     ]
 
     ffmpeg_cmd = ffmpeg_cmd_gpu
     if params.get("cpu", None):
         ffmpeg_cmd = ffmpeg_cmd_cpu
+
+    # Add the video file path to the command
+    ffmpeg_cmd.append(f"{video_fsp}")
 
     return ffmpeg_cmd
 
@@ -318,6 +319,7 @@ def get_ffmpeg_cmd(params: Params) -> List[str]:
 @click.option(
     "--output",
     "output_path",
+    type=click.Path(),
     default="output.mp4",
     required=False,
     help="File to save video to.",
@@ -335,6 +337,14 @@ def get_ffmpeg_cmd(params: Params) -> List[str]:
     callback=lambda ctx, param, value: parse_time(value) if value is not None else None,
     help="Duration in n, nn:nn, or nn:nn:nn format.",
 )
+
+@click.option(
+    "--include_audio",
+    is_flag=True,
+    default=False,
+    help="Include audio from the original source file",
+)
+
 @click.option(
     "--cpu",
     is_flag=True,
@@ -348,9 +358,9 @@ def get_ffmpeg_cmd(params: Params) -> List[str]:
 )
 @click.pass_context
 def mp4(
-    ctx, project_path, project_file, output_path, start, duration, cpu, overwrite
+    ctx, project_path, project_file, output_path, start, duration, cpu, overwrite, include_audio
 ) -> bool:
-    """Function to produce MP$ video from a spectrogram
+    """Function to produce MP4 video from a spectrogram
 
     This approach uses a sliding window crop to sample the spectrogram images,
     then pipes the image to ffmpeg to encode.
@@ -387,13 +397,20 @@ def mp4(
 
     seconds_in_view: Final = params.audio_visualization["seconds_in_view"]
 
+    # log if autio is to be included
+    params["include_audio"] = params.check_value("include_audio", include_audio, False)
+    if params.get("include_audio", False):
+        logging.info("Audio will be included in the video.")
+
+
     # get the ffmpeg command line parameter for gpu, or cpu
-    print(f"ffmpeg cmd : {get_ffmpeg_cmd(params)}")
+    ffmpeg_cmd = get_ffmpeg_cmd(params)
+    print(f"ffmpeg cmd : {ffmpeg_cmd}")
 
     # create the encoder pipe so we can stream the frames
     with open(Path(project_path) / "ffmpeg_log.txt", "wb") as log_file:
         with subprocess.Popen(
-            get_ffmpeg_cmd(params),
+            ffmpeg_cmd,
             stdin=subprocess.PIPE,
             stdout=log_file,
             stderr=subprocess.STDOUT,
@@ -497,8 +514,66 @@ def mp4(
 
                     # Write the frame bytes to ffmpeg's stdin
                     ffmpeg_process.stdin.write(final_frame_bytes)
+    ## end of rendering loop
+    logging.info("Rendering loop completed.")
+    # add audio
+    if params.get("include_audio", False):
+        combine_audio(params, project.audio_metadata.get("source_audio_path"), params.get("output_path"), project_path)
 
     return True
+
+def combine_audio(params: Params, audio_path: str, video_path: str, project_path: str) -> bool:
+    """Combine audio with video using ffmpeg
+
+    Args:
+        params (Params): Configuration and parameters for the spectrogram.
+        audio_path (str): path to audio file
+        video_path (str): path to video file
+
+    Returns:
+        bool: True if the audio was combined with the video successfully.
+    """
+
+    # Check if audio file exists
+    if not Path(audio_path).exists():
+        logging.error(f"Audio file not found at {audio_path}")
+        return False
+
+    # Check if video file exists
+    if not Path(video_path).exists():
+        logging.error(f"Video file not found at {video_path}")
+        return False
+
+    # Prepare the FFmpeg command
+    # log output path
+    logging.info(f"Output path: {params.get('output_path')}")
+
+    temp_file=Path(project_path) / "temp.mp4"
+    ffmpeg_cmd = [
+        "ffmpeg",
+        "-i", video_path,
+        "-i", audio_path,
+        "-c:v", "copy",  # Copy the video without re-encoding
+        "-c:a", "aac",   # Use AAC codec for audio
+        "-strict", "experimental",
+        "-shortest",     # Make the output as long as the shortest input
+        temp_file
+    ]
+
+    try:
+        # Run the FFmpeg command
+        subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
+        logging.info(f"Audio successfully combined with video. Output saved to {temp_file}")
+        return True
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error combining audio with video: {e}")
+        logging.error(f"FFmpeg stdout: {e.stdout}")
+        logging.error(f"FFmpeg stderr: {e.stderr}")
+        return False
+    
+
+
+
 
 
 def apply_overlays(params: Params, global_frame_count: int, cropped_frame_rgba: Image):

@@ -1,33 +1,29 @@
 audio_visualization:
   audio_visual_span: 1
   cmap: magma
-  max_spectrogram_width: 6000
-  playhead_position: 0.25  # Centered horizontally
-  playhead_rgba: [255,255,255,192] # white, slightly transparent
-  playhead_width: 2 # Assuming pixels for thick
-  playhead_section_rgba : [0,0,0,0]
-  seconds_in_view: 45
-  profiling_chunk_duration: 60 
+  max_spectrogram_width: 65000
+  seconds_in_view: 20
+  profiling_chunk_duration: 900
 mel_spectrogram:
   db_high: 0
-  db_low: -70
-  f_high: 10000
+  db_low: -80
+  f_high: 22000
   f_low: 50
   hop_length: 512
   n_fft: 2048
-  n_mels: 400
+  n_mels: 200
 video:
   frame_rate: 30
-  height: 200
+  height: 400
   width: 800
 overlays:
   frequency_axis:
-    enabled : False
-    freq_hz : [100, 1000, 3000, 5000, 8000]
-    axis_position: 0.25  # Centered horizontally
+    enabled : True
+    freq_hz : [100, 1000, 3000, 5000, 8000, 20000]
+    axis_position: 0.5  # Centered horizontally
     axis_rgba: [255,255,255,192] # white, slightly transparent
   playhead:
-    enabled : False
+    enabled : True
     playhead_position: 0.5  # Centered horizontally
     playhead_rgba: [255,255,255,192] # white, slightly transparent
     playhead_width: 2 # Assuming pixels for thick
@@ -54,7 +50,7 @@ overlays:
         text: bar
         rgba: [255, 255, 255, 128]
       - type : box
-        time: [20, 30]
-        freq: [1000, 1500]
-        text: "1000, 1500"
+        time: [13.3, 13.5]
+        freq: [400, 2100]
+        text: "POI"
         rgba: [255, 255, 255, 128]    
