@@ -137,11 +137,18 @@ class Params:
                 f"JSON configuration file not found at {config_path}"
             ) from e
 
-    def overlay_args(self, args: argparse.Namespace):
+    def overlay_args(self, args):
         """Overlays command-line arguments onto the existing configuration."""
-        for key, value in vars(args).items():
-            if value is not None:
-                self._config[key] = value
+        if isinstance(args, dict):
+            # Assuming args is a dictionary of command-line options from Click
+            for key, value in args.items():
+                if value is not None:
+                    self._config[key] = value
+        else:
+            # Assuming args is an argparse.Namespace
+            for key, value in vars(args).items():
+                if value is not None:
+                    self._config[key] = value
 
     def __getitem__(self, key: str) -> Any:
         """Allows for dict-like retrieval of configuration values."""
@@ -180,3 +187,27 @@ class Params:
         path = Path(file_path)
         content = json.dumps(config_to_save, indent=4)
         path.write_text(content, encoding="utf-8")
+
+    def check_value(
+        self, key_name: str, cli_value: Optional[Any], default_value: Any
+    ) -> Any:
+        """
+        Derive the value of a parameter based on the provided CLI value, the internal configuration,
+        and a default value. The CLI value has the highest priority, followed by the value in the
+        internal configuration, and finally the default value if neither are provided.
+
+        :param key_name: The key corresponding to the parameter in the configuration.
+        :param cli_value: The value provided via the CLI, or None if not provided.
+        :param default_value: The default value to use if no other value is provided.
+        :return: The derived value for the parameter.
+        """
+        # Check if the CLI provides a value
+        if cli_value is not None:
+            return cli_value
+
+        # If not, check if the internal configuration has the value
+        if key_name in self.config:
+            return self.config[key_name]
+
+        # If neither provides the value, return the default
+        return default_value
