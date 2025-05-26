@@ -230,73 +230,59 @@ def adjust_spectrogram_for_playhead(
 
 
 def get_ffmpeg_cmd(params: Params) -> List[str]:
-    """Function to select the best ffmpeg command line arguments"""
+    """Returns FFmpeg command for near-lossless spectrogram video encoding."""
     video_fsp = params.output_path
     print(video_fsp)
 
-    # geometry of resulting mp4
+    # Geometry of resulting video
     frame_width: Final[int] = params.video.get("width", 800)
     frame_height: Final[int] = params.video.get("height", 200)
     frame_rate: Final[int] = params.video.get("frame_rate", 30)
 
-    ffmpeg_cmd_cpu: List[str] = [
-        "ffmpeg",
-        "-y",
-        "-f",
-        "rawvideo",
-        "-vcodec",
-        "rawvideo",
-        "-s",
-        f"{frame_width}x{frame_height}",  # Set frame size
-        "-pix_fmt",
-        "rgb24",  # Set pixel format
-        "-r",
-        f"{frame_rate}",
-        "-i",
-        "-",  # Input from stdin
-        "-c:v",
-        "libx264",  # Use libx264 for H.264 encoding
-        "-crf",
-        "17",  # Adjust CRF as needed for balance between quality and file size
-        "-preset",
-        "fast",  # ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
-        "-vf",
-        "format=yuv420p",  # Pixel format for compatibility
-    ]
 
-    ### Start the ffmpeg process
+    # Point to the ffmpeg with nvenc support
+    ffmpeg_binary = params.video.get("ffmpeg_binary", "/usr/bin/ffmpeg")
+
+    # GPU (h264_nvenc) - Near-lossless settings
     ffmpeg_cmd_gpu: List[str] = [
-        "ffmpeg",
+        ffmpeg_binary,  # Full path to static binary
         "-y",
-        "-f",
-        "rawvideo",
-        "-vcodec",
-        "rawvideo",
-        "-s",
-        f"{frame_width}x{frame_height}",  # Set frame size
-        "-pix_fmt",
-        "rgb24",  # Set pixel format
-        "-r",
-        f"{frame_rate}",
-        "-i",
-        "-",  # Input from stdin
-        "-c:v",
-        "h264_nvenc",  # nvidia acceleration
-        "-crf",
-        "17",  # Constant rate factor for quality
-        "-preset",
-        "slow",  # Preset for encoding speed
-        "-vf",
-        "format=yuv420p",  # Pixel format for compatibility
+        "-f", "rawvideo",
+        "-vcodec", "rawvideo",
+        "-s", f"{frame_width}x{frame_height}",
+        "-pix_fmt", "rgb24",
+        "-r", f"{frame_rate}",
+        "-i", "-",
+        "-c:v", "h264_nvenc",
+        "-qp", "17",  # Use -qp instead of -cq for constant quality
+        "-preset", "p7",
+        "-tune", "hq",
+        "-pix_fmt", "yuv444p",
+        "-profile:v", "high",
+        "-coder", "1",
+        "-bf", "3",
     ]
 
-    ffmpeg_cmd = ffmpeg_cmd_gpu
-    if params.get("cpu", None):
-        ffmpeg_cmd = ffmpeg_cmd_cpu
+    # CPU (libx264) - Fallback option
+    ffmpeg_cmd_cpu: List[str] = [
+        ffmpeg_binary,  # Use the static binary
+        "-y",
+        "-f", "rawvideo",
+        "-vcodec", "rawvideo",
+        "-s", f"{frame_width}x{frame_height}",
+        "-pix_fmt", "rgb24",
+        "-r", f"{frame_rate}",
+        "-i", "-",
+        "-c:v", "libx264",
+        "-crf", "17",
+        "-preset", "slow",
+        "-x264-params", "ref=6:bframes=8",
+        "-vf", "format=yuv444p",
+        "-profile:v", "high444",
+    ]
 
-    # Add the video file path to the command
+    ffmpeg_cmd = ffmpeg_cmd_gpu if not params.get("cpu") else ffmpeg_cmd_cpu
     ffmpeg_cmd.append(f"{video_fsp}")
-
     return ffmpeg_cmd
 
 
@@ -978,8 +964,10 @@ def profile(
 
         samples_per_chunk = int(params.sr * profiling_chunk_duration)
         global_max_power = 0
+        total_chunks = len(y) // samples_per_chunk  # Integer division
+
         # Process each chunk
-        for i in tqdm(range(0, len(y), samples_per_chunk)):
+        for i in tqdm(range(0, total_chunks * samples_per_chunk, samples_per_chunk)):
             y_chunk = y[i : i + samples_per_chunk]
             s = librosa.feature.melspectrogram(
                 y=y_chunk,
@@ -991,7 +979,7 @@ def profile(
                 fmax=melspec.get("f_high", params.sr / 2),
             )
             max_power = np.max(s)
-            # print(f"profiling chunk max power : {max_power}")
+            #print(f"profiling chunk max power : {max_power}")
             global_max_power = max(global_max_power, max_power)
 
         project.audio_metadata["max_power"] = float(global_max_power)
@@ -1175,7 +1163,7 @@ def spectrograms(
         )
 
         y, _ = librosa.load(
-            path=input_path, sr=target_sr, offset=start, duration=duration, mono=True
+            path=input_path, sr=target_sr, offset=start+current_position_secs, duration=duration_secs, mono=True
         )
 
         # y, sr = load_and_resample_mono(params, current_position_secs, duration_secs)
@@ -1189,6 +1177,10 @@ def spectrograms(
             fmin=melspec.get("f_low", 0),
             fmax=melspec.get("f_high", target_sr / 2),
         )
+
+        local_max = np.max(s)
+        print(f"Chunk {count}: local max power = {local_max}, global max = {project.audio_metadata.get('max_power')}")
+
 
         s_db = librosa.power_to_db(
             s,
@@ -1236,6 +1228,7 @@ def spectrograms(
             "filename": image_filename,
             "start_time": current_position_secs,
             "end_time": current_position_secs + duration_secs,
+            "max_power": int(local_max),
             # Additional metadata can be included here
         }
         # Append this metadata to the project data

@@ -1,0 +1,34 @@
+audio_visualization:
+  audio_visual_span: 1
+  cmap: YlGnBu
+  max_spectrogram_width: 10000
+  playhead_position: 0.25  # Centered horizontally
+  playhead_rgba: [255,255,255,192] # white, slightly transparent
+  playhead_width: 2 # Assuming pixels for thick
+  playhead_section_rgba : [0,0,0,0]
+  seconds_in_view: 60
+  profiling_chunk_duration: 60 
+mel_spectrogram:
+  db_high: 0
+  db_low: -70
+  f_high: 10000
+  f_low: 50
+  hop_length: 512
+  n_fft: 4096
+  n_mels: 128
+video:
+  frame_rate: 30
+  height: 128
+  width: 1920
+  ffmpeg_binary: /home/matt/ffmpeg/ffmpeg/ffmpeg
+overlays:
+  frequency_axis:
+    freq_hz : [100, 1000, 3000, 5000, 8000]
+    axis_position: 0.25  # Centered horizontally
+    axis_rgba: [255,255,255,192] # white, slightly transparent
+  playhead:
+    enabled : True
+    playhead_position: 0.5  # Centered horizontally
+    playhead_rgba: [255,255,255,192] # white, slightly transparent
+    playhead_width: 2 # Assuming pixels for thick
+    playhead_section_rgba : [0,0,0,0]
