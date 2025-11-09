@@ -229,6 +229,131 @@ def adjust_spectrogram_for_playhead(
     return image
 
 
+def apply_annotations_to_spectrogram(
+    params: Params,
+    spectrogram_image: Image.Image,
+    image_metadata: dict,
+) -> Image.Image:
+    """
+    Renders annotations directly onto the spectrogram image (once per spectrogram).
+
+    This replaces the per-frame annotation rendering with a one-time overlay
+    applied when the spectrogram is loaded.
+
+    Args:
+        params (Params): Configuration and parameters for the spectrogram.
+        spectrogram_image (Image.Image): The loaded spectrogram PNG image.
+        image_metadata (dict): Metadata for this image (start_time, end_time, filename).
+
+    Returns:
+        Image.Image: The spectrogram with annotations composited onto it.
+    """
+    # Convert to RGBA for overlay compositing
+    spectrogram_rgba = spectrogram_image.convert("RGBA")
+
+    # Create a transparent overlay for annotations
+    annotation_overlay = Image.new("RGBA", spectrogram_rgba.size, (255, 0, 0, 0))
+    draw = ImageDraw.Draw(annotation_overlay)
+
+    # Get time range this spectrogram covers
+    image_start_time = image_metadata["start_time"]
+    image_end_time = image_metadata["end_time"]
+    image_duration = image_end_time - image_start_time
+
+    # Calculate pixels per second for this spectrogram
+    pixels_per_second = spectrogram_rgba.width / image_duration
+
+    # Process each label
+    for label in params.overlays["labels"]["items"]:
+        # Get label configuration
+        x_pos_ratio = label.get("x_pos_ratio", None)
+        time_range = label.get("time", None)
+        frequency_range = label["freq"]
+        ink_color = get_color(label["rgba"])
+
+        # Calculate x positions
+        if x_pos_ratio is not None:
+            # Fixed position label: convert ratio to time coordinate
+            # This will appear at different screen positions as video scrolls
+            label_time = image_start_time + (image_duration * x_pos_ratio)
+            x_px = (label_time - image_start_time) * pixels_per_second
+            x0 = x1 = round(x_px)
+        elif time_range is not None:
+            label_start_time, label_end_time = time_range
+
+            # Check if label overlaps with this spectrogram image
+            if label_end_time < image_start_time or label_start_time > image_end_time:
+                continue  # Label not in this image, skip
+
+            # Clip label to image boundaries
+            clipped_start = max(label_start_time, image_start_time)
+            clipped_end = min(label_end_time, image_end_time)
+
+            # Convert to pixel positions
+            x0 = round((clipped_start - image_start_time) * pixels_per_second)
+            x1 = round((clipped_end - image_start_time) * pixels_per_second)
+        else:
+            # No time or position specified, skip
+            continue
+
+        # Calculate y positions from frequency
+        y_px_list = calculate_frequency_positions(
+            params.mel_spectrogram["f_low"],
+            params.mel_spectrogram["f_high"],
+            freqs_of_interest=frequency_range,
+            img_height=spectrogram_rgba.height,
+        )
+
+        y0 = max(float(y_px_list[1][0]), 0)
+        y1 = min(float(y_px_list[0][0]), spectrogram_rgba.height)
+
+        # Draw annotation based on type
+        match label["type"]:
+            case "box":
+                draw.rectangle((x0, y0, x1, y1), outline=ink_color, width=1)
+            case "point":
+                draw.ellipse(
+                    [x0, y0, x0 + 7.5, y0 + 7.5],
+                    outline=ink_color,
+                    width=1,
+                    fill=ink_color,
+                )
+            case "brace":
+                draw.line((x0, y0, x0, y1), fill=ink_color, width=1)  # vertical
+                draw.line((x0, y0, x0 + 10, y0), fill=ink_color, width=1)  # tick top
+                draw.line((x0, y1, x0 + 10, y1), fill=ink_color, width=1)  # tick bottom
+
+        # Draw text
+        font = ImageFont.load_default()
+        left, top, right, bottom = font.getbbox(text=label["text"])
+        text_size_y = top - bottom
+        text_size_x = right - left
+
+        text_x = x0
+        text_y = y0
+
+        v_align = label.get("v_align", None)
+        match v_align:
+            case "top":
+                text_y = y0
+            case "bottom":
+                text_y = y1 - text_size_y
+            case _:  # default to middle of freq range
+                text_y = y0 + ((y1 - y0) / 2) + (text_size_y / 2)
+
+        draw.text(
+            (text_x - text_size_x - 10, text_y),
+            label["text"],
+            fill=ink_color,
+            font=font,
+        )
+
+    # Composite annotations onto spectrogram
+    result = Image.alpha_composite(spectrogram_rgba, annotation_overlay)
+
+    return result
+
+
 def get_ffmpeg_cmd(params: Params) -> List[str]:
     """Returns FFmpeg command for near-lossless spectrogram video encoding."""
     video_fsp = params.output_path
@@ -432,6 +557,14 @@ def mp4(
                 # retrieve the image
                 spectrogram_image: Final = Image.open(Path(project_path) / filename)
 
+                # Apply annotations to the spectrogram once (not per-frame)
+                if params.overlays.get("labels", {}).get("enabled", None):
+                    spectrogram_image = apply_annotations_to_spectrogram(
+                        params,
+                        spectrogram_image,
+                        image_metadata
+                    )
+
                 # the number of frames we need to render the spectrograms
                 num_frames = int(image_duration * frame_rate)
 
@@ -574,15 +707,8 @@ def apply_overlays(params: Params, global_frame_count: int, cropped_frame_rgba: 
             cropped_frame_rgba, playhead_overlay_rgba
         )
 
-    if params.overlays.get("labels", {}).get("enabled", None):
-        # create overlay
-        label_overlay = create_labels_overlay(
-            params,
-            global_frame_count,
-            cropped_frame_rgba.size,
-        )
-        # apply to frame
-        cropped_frame_rgba = Image.alpha_composite(cropped_frame_rgba, label_overlay)
+    # NOTE: Labels/annotations are now rendered directly on spectrograms
+    # when they are loaded, not per-frame. See apply_annotations_to_spectrogram()
 
     if params.overlays["frequency_axis"].get("enabled", None):
         # create overlay
