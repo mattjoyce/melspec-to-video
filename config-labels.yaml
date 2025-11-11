@@ -1,6 +1,7 @@
 audio_visualization:
   audio_visual_span: 1
   cmap: magma
+  interpolation: bilinear  # Smooths horizontal banding (bilinear, bicubic, gaussian, none)
   max_spectrogram_width: 6000
   playhead_position: 0.25  # Centered horizontally
   playhead_rgba: [255,255,255,192] # white, slightly transparent

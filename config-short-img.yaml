@@ -1,6 +1,7 @@
 audio_visualization:
   audio_visual_span: 1
   cmap: magma
+  interpolation: bilinear  # Smooths horizontal banding (bilinear, bicubic, gaussian, none)
   max_spectrogram_width: 1000
   seconds_in_view: 15
   profiling_chunk_duration: 900
