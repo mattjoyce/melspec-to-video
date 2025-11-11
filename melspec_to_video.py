@@ -11,6 +11,7 @@ import librosa
 import librosa.display
 import matplotlib.pyplot as plt
 import numpy as np
+import soundfile as sf
 from PIL import Image, ImageDraw, ImageFont
 from tqdm import tqdm
 
@@ -45,6 +46,144 @@ from params import Params
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
+
+def detect_ambisonic_format(file_path: str) -> Optional[str]:
+    """
+    Detect if a WAV file is in ambisonic format and which type.
+
+    Args:
+        file_path: Path to audio file
+
+    Returns:
+        'A' for A-Format, 'B' for B-Format/AmbiX, None for non-ambisonic
+    """
+    try:
+        info = sf.info(file_path)
+
+        # Must be 4-channel for first-order ambisonics
+        if info.channels != 4:
+            return None
+
+        # Try to read metadata from the file
+        # Note: soundfile doesn't expose all WAV metadata, so we use a subprocess
+        import subprocess
+        result = subprocess.run(
+            ['ffprobe', '-hide_banner', '-show_format', file_path],
+            capture_output=True,
+            text=True
+        )
+
+        metadata = result.stdout + result.stderr
+
+        # Check for explicit format indicators in coding_history
+        if 'Rec Mode=Ambisonics A' in metadata or 'Rec Mode=A-Format' in metadata:
+            logging.info(f"Detected A-Format ambisonic file: {Path(file_path).name}")
+            return 'A'
+        elif 'Rec Mode=AmbiX' in metadata or 'Rec Mode=B-Format' in metadata:
+            logging.info(f"Detected B-Format (AmbiX) file: {Path(file_path).name}")
+            return 'B'
+        elif 'zTRK1=W' in metadata or 'NAME>W</NAME>' in metadata:
+            # Check for W channel label (indicates B-Format)
+            logging.info(f"Detected B-Format file (by channel labels): {Path(file_path).name}")
+            return 'B'
+        elif 'zTRK1=FLU' in metadata or 'zTRK1=LF' in metadata:
+            # Check for capsule labels (indicates A-Format)
+            logging.info(f"Detected A-Format file (by channel labels): {Path(file_path).name}")
+            return 'A'
+        else:
+            # Unknown 4-channel format
+            logging.warning(f"4-channel file detected but format unclear: {Path(file_path).name}")
+            return None
+
+    except Exception as e:
+        logging.debug(f"Error detecting ambisonic format: {e}")
+        return None
+
+
+def aformat_to_bformat_simple(capsules: np.ndarray) -> np.ndarray:
+    """
+    Convert A-Format (4 capsule signals) to B-Format (W, X, Y, Z).
+    Uses standard tetrahedral array conversion matrix.
+
+    Args:
+        capsules: numpy array of shape (samples, 4) containing A-Format signals
+
+    Returns:
+        numpy array of shape (samples, 4) containing B-Format signals (W, Y, Z, X in AmbiX order)
+    """
+    A = capsules[:, 0]
+    B = capsules[:, 1]
+    C = capsules[:, 2]
+    D = capsules[:, 3]
+
+    # Standard tetrahedral conversion
+    W = 0.5 * (A + B + C + D)           # Omnidirectional
+    X = 0.5 * (A + B - C - D)           # Front-Back
+    Y = 0.5 * (A - B + C - D)           # Left-Right
+    Z = 0.5 * (A - B - C + D)           # Up-Down
+
+    # Return in AmbiX order: W, Y, Z, X
+    return np.stack([W, Y, Z, X], axis=1)
+
+
+def load_audio_with_ambisonic_support(
+    file_path: str,
+    sr: int,
+    offset: float = 0.0,
+    duration: Optional[float] = None
+) -> Tuple[np.ndarray, int]:
+    """
+    Load audio with automatic ambisonic format detection and handling.
+
+    For A-Format: converts to B-Format, then extracts W channel
+    For B-Format: extracts W channel directly
+    For other formats: uses librosa's default mono conversion
+
+    Args:
+        file_path: Path to audio file
+        sr: Target sample rate
+        offset: Start time in seconds
+        duration: Duration to load in seconds
+
+    Returns:
+        Tuple of (audio_data, sample_rate) where audio_data is mono
+    """
+    ambisonic_format = detect_ambisonic_format(file_path)
+
+    if ambisonic_format == 'A':
+        # A-Format: load all 4 channels, convert to B-Format, extract W
+        logging.info("Converting A-Format to B-Format and extracting W channel...")
+        y, actual_sr = librosa.load(file_path, sr=sr, offset=offset, duration=duration, mono=False)
+
+        if y.shape[0] == 4:
+            # Transpose to (samples, channels) for conversion
+            y = y.T
+            # Convert A to B
+            b_format = aformat_to_bformat_simple(y)
+            # Extract W channel and flatten
+            w_channel = b_format[:, 0]
+            return w_channel, actual_sr
+        else:
+            logging.warning("Expected 4 channels for A-Format, using default mono conversion")
+            return librosa.load(file_path, sr=sr, offset=offset, duration=duration, mono=True)
+
+    elif ambisonic_format == 'B':
+        # B-Format: load all channels and extract W (channel 0)
+        logging.info("Extracting W channel from B-Format (AmbiX)...")
+        y, actual_sr = librosa.load(file_path, sr=sr, offset=offset, duration=duration, mono=False)
+
+        if y.ndim > 1 and y.shape[0] >= 1:
+            # Extract W channel (first channel in AmbiX: W, Y, Z, X)
+            w_channel = y[0]
+            return w_channel, actual_sr
+        else:
+            logging.warning("Expected multi-channel B-Format, using as-is")
+            return y, actual_sr
+
+    else:
+        # Not ambisonic or detection failed - use librosa's default mono conversion
+        return librosa.load(file_path, sr=sr, offset=offset, duration=duration, mono=True)
 
 
 @click.group()
@@ -1082,11 +1221,13 @@ def profile(
             audio_length=librosa.get_duration(path=input_path),
         )
 
-        y, _ = librosa.load(
-            path=input_path, sr=target_sr, offset=start, duration=duration, mono=True
+        # Load audio with automatic ambisonic support
+        y, _ = load_audio_with_ambisonic_support(
+            file_path=input_path,
+            sr=target_sr,
+            offset=start,
+            duration=duration
         )
-
-        # y, _ = load_and_resample_mono(params, start_secs=start, duration_secs=duration)
 
         samples_per_chunk = int(params.sr * profiling_chunk_duration)
         global_max_power = 0
@@ -1288,11 +1429,13 @@ def spectrograms(
             total_duration_secs - current_position_secs,
         )
 
-        y, _ = librosa.load(
-            path=input_path, sr=target_sr, offset=start+current_position_secs, duration=duration_secs, mono=True
+        # Load audio with automatic ambisonic support
+        y, _ = load_audio_with_ambisonic_support(
+            file_path=input_path,
+            sr=target_sr,
+            offset=start + current_position_secs,
+            duration=duration_secs
         )
-
-        # y, sr = load_and_resample_mono(params, current_position_secs, duration_secs)
 
         s = librosa.feature.melspectrogram(
             y=y,
@@ -1327,12 +1470,19 @@ def spectrograms(
         # Use imshow instead of specshow for better interpolation control
         plt.figure(figsize=(image_width / 100, video.get("height", 100) / 100))
         ax = plt.gca()
+
+        # Set explicit vmin/vmax to ensure consistent normalization across all chunks
+        db_low = melspec.get("db_low", -70)
+        db_high = melspec.get("db_high", 0)
+
         img = ax.imshow(
             s_db,
             aspect='auto',
             origin='lower',
             cmap=audiovis.get("cmap", "magma"),
             interpolation=audiovis.get("interpolation", "bilinear"),  # Smooth out horizontal banding
+            vmin=db_low,  # Ensure consistent normalization
+            vmax=db_high,  # across all spectrogram chunks
         )
         plt.axis("off")
         plt.tight_layout(pad=0)

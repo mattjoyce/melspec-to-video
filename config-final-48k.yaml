@@ -20,8 +20,15 @@ video:
   width: 1920
 overlays:
   frequency_axis:
-    enabled : False
+    enabled: True
+    axis_position: 0.1
+    axis_rgba: [255, 255, 255, 192]
+    freq_hz: [100, 500, 1000, 2000, 5000, 10000]
   playhead:
-    enabled : False
+    enabled: True
+    playhead_position: 0.5
+    playhead_width: 2
+    playhead_rgba: [255, 255, 255, 192]
+    playhead_section_rgba: [0, 0, 0, 0]
   labels:
     enabled: False

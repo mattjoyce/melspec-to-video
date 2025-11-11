@@ -1,0 +1,313 @@
+# ==============================================================================
+# MELSPEC-TO-VIDEO - COMPLETE CONFIGURATION EXAMPLE
+# ==============================================================================
+# This file demonstrates ALL available configuration options with detailed
+# documentation for each parameter.
+#
+# Usage: python melspec_to_video.py --config config-example-full.yaml <command>
+# ==============================================================================
+
+# ==============================================================================
+# AUDIO VISUALIZATION SETTINGS
+# ==============================================================================
+audio_visualization:
+
+  # Seconds of audio visible in each video frame
+  # Controls the horizontal "zoom" of the spectrogram
+  # Smaller values = more zoomed in (shows less time per frame)
+  # Larger values = more zoomed out (shows more time per frame)
+  seconds_in_view: 45
+
+  # Maximum width (in pixels) of each spectrogram image chunk
+  # Longer audio files are split into multiple chunks of this width
+  # Higher values = fewer, larger PNG files (but more memory usage)
+  max_spectrogram_width: 6000
+
+  # Colormap for the spectrogram visualization
+  # Options: magma, inferno, plasma, viridis, cividis, twilight, turbo, etc.
+  # See: https://matplotlib.org/stable/users/explain/colors/colormaps.html
+  cmap: magma
+
+  # Interpolation method for spectrogram rendering
+  # Options: none, nearest, bilinear, bicubic, spline16, spline36, etc.
+  # 'bilinear' eliminates horizontal banding artifacts
+  # 'none' or 'nearest' for sharp, pixelated look
+  interpolation: bilinear
+
+  # Duration (in seconds) of each chunk when profiling audio for max power
+  # Larger chunks = faster profiling but less granular power analysis
+  # Smaller chunks = more accurate max power detection but slower
+  profiling_chunk_duration: 60
+
+  # DEPRECATED: Legacy parameter (no longer used)
+  audio_visual_span: 1
+
+# ==============================================================================
+# MEL SPECTROGRAM SETTINGS
+# ==============================================================================
+mel_spectrogram:
+
+  # Frequency range (in Hz) for the spectrogram
+  # f_low: Lowest frequency to display (bottom of spectrogram)
+  # f_high: Highest frequency to display (top of spectrogram)
+  # For human voice: 50-8000 Hz
+  # For music: 50-20000 Hz
+  # For ultrasonic (bats): 10000-120000 Hz
+  f_low: 50
+  f_high: 10000
+
+  # Dynamic range (in dB) for amplitude visualization
+  # db_low: Minimum power level (darker colors)
+  # db_high: Maximum power level (brighter colors)
+  # Larger range (e.g., -80 to 0) shows more detail in quiet sounds
+  # Smaller range (e.g., -50 to 0) emphasizes louder sounds
+  db_low: -70
+  db_high: 0
+
+  # FFT (Fast Fourier Transform) parameters
+  # n_fft: Number of samples in each FFT window (frequency resolution)
+  #        Higher = better frequency resolution, worse time resolution
+  #        Must be power of 2 (512, 1024, 2048, 4096, etc.)
+  n_fft: 2048
+
+  # hop_length: Number of samples between successive FFT windows (time resolution)
+  #             Smaller = better time resolution, more computation
+  #             Typical: n_fft/4 or n_fft/2
+  hop_length: 400
+
+  # n_mels: Number of mel frequency bands (vertical resolution)
+  #         Higher = more frequency detail, larger images
+  #         Typical: 128-512
+  n_mels: 256
+
+# ==============================================================================
+# VIDEO OUTPUT SETTINGS
+# ==============================================================================
+video:
+
+  # Output video dimensions (in pixels)
+  # width: Video width (standard: 1920, 1280, 800)
+  # height: Video height (standard: 1080, 720, 200-400 for spectrograms)
+  width: 1920
+  height: 200
+
+  # Video frame rate (frames per second)
+  # Standard rates: 24, 25, 30, 60
+  # Higher = smoother playback but larger file size
+  frame_rate: 30
+
+  # Path to ffmpeg binary (for custom ffmpeg installations)
+  # Default: /usr/bin/ffmpeg (Linux) or /opt/homebrew/bin/ffmpeg (macOS)
+  # Windows: C:/ffmpeg/bin/ffmpeg.exe
+  ffmpeg_binary: /opt/homebrew/bin/ffmpeg
+
+# ==============================================================================
+# OVERLAYS - VISUAL ANNOTATIONS AND INDICATORS
+# ==============================================================================
+overlays:
+
+  # ---------------------------------------------------------------------------
+  # PLAYHEAD - Moving vertical line showing current playback position
+  # ---------------------------------------------------------------------------
+  playhead:
+
+    # Enable or disable the playhead overlay
+    enabled: true
+
+    # Position of playhead line (0.0 = left edge, 1.0 = right edge, 0.5 = center)
+    # When enabled, spectrogram scrolls past this fixed line
+    playhead_position: 0.5
+
+    # Line width in pixels (1-10 typical)
+    playhead_width: 2
+
+    # Playhead line color [R, G, B, Alpha]
+    # RGB values: 0-255, Alpha: 0 (transparent) to 255 (opaque)
+    # Examples:
+    #   [255, 255, 255, 192] = semi-transparent white
+    #   [255, 0, 0, 255] = solid red
+    #   [0, 255, 0, 128] = half-transparent green
+    playhead_rgba: [255, 255, 255, 192]
+
+    # Color for lead-in and lead-out sections [R, G, B, Alpha]
+    # These sections pad the video at start/end when playhead is not centered
+    # [0, 0, 0, 0] = fully transparent (recommended)
+    # [0, 0, 0, 255] = solid black
+    playhead_section_rgba: [0, 0, 0, 0]
+
+  # ---------------------------------------------------------------------------
+  # FREQUENCY AXIS - Vertical axis showing frequency labels
+  # ---------------------------------------------------------------------------
+  frequency_axis:
+
+    # Enable or disable the frequency axis
+    enabled: true
+
+    # Horizontal position of axis line (0.0 = left edge, 1.0 = right edge)
+    # 0.1 = 10% from left edge (typical)
+    # 0.9 = 90% from left edge (right side)
+    axis_position: 0.1
+
+    # Axis and label color [R, G, B, Alpha]
+    axis_rgba: [255, 255, 255, 192]
+
+    # Frequency values (in Hz) to label on the axis
+    # Labels will be drawn at these frequencies with tick marks
+    # Adjust based on your f_low and f_high range
+    freq_hz: [100, 500, 1000, 2000, 5000, 10000]
+
+  # ---------------------------------------------------------------------------
+  # LABELS - Custom annotations for specific time/frequency regions
+  # ---------------------------------------------------------------------------
+  labels:
+
+    # Enable or disable label annotations
+    # When enabled, labels are rendered directly onto spectrogram images
+    enabled: false
+
+    # List of individual label items
+    items:
+
+      # Example 1: Box annotation around a time/frequency region
+      - type: box                    # Shape: "box", "point", or "brace"
+        text: "Bird Call"            # Label text
+        time: [10.5, 15.2]           # Time range [start, end] in seconds
+        freq: [2000, 8000]           # Frequency range [low, high] in Hz
+        rgba: [255, 255, 0, 255]     # Color [R, G, B, Alpha] - yellow
+        v_align: top                 # Vertical text alignment: "top", "bottom", or center (default)
+
+      # Example 2: Point marker at specific time/frequency
+      - type: point
+        text: "Click"
+        time: [25.0, 25.0]           # Single point (start = end)
+        freq: [1000, 1000]           # Single frequency
+        rgba: [255, 0, 0, 255]       # Red
+        v_align: bottom
+
+      # Example 3: Brace showing frequency range (vertical line with ticks)
+      - type: brace
+        text: "Harmonic Range"
+        time: [30.0, 35.0]           # Time range for brace
+        freq: [440, 1760]            # Frequency range (A4 to A6)
+        rgba: [0, 255, 255, 255]     # Cyan
+        v_align: top
+
+      # Example 4: Fixed position label (appears at same screen position)
+      # Uses x_pos_ratio instead of time
+      - type: box
+        text: "Reference"
+        x_pos_ratio: 0.5             # Fixed at 50% of frame width
+        freq: [100, 500]             # Frequency range
+        rgba: [255, 255, 255, 128]   # Semi-transparent white
+        v_align: top
+
+# ==============================================================================
+# COMMAND-LINE OVERRIDES (Optional)
+# ==============================================================================
+# These settings can be specified in the config but are typically provided
+# via command-line arguments. Command-line args take precedence over config.
+# ==============================================================================
+
+# Input audio file path
+# Can be: .wav, .mp3, .flac, .ogg, etc.
+# Supports ambisonic files (A-Format or B-Format/AmbiX) - W channel auto-extracted
+# input: /path/to/audio.wav
+
+# Output video file path
+# output: output.mp4
+
+# Project directory for intermediate files (spectrograms, metadata)
+# path: ./project_directory
+
+# Sample rate (Hz) for audio processing
+# null = use original sample rate from audio file
+# Number = resample to this rate (e.g., 48000 for 48kHz)
+# sr: null
+
+# Start time (in seconds) for analysis/rendering
+# 0 = start from beginning
+# start: 0
+
+# Duration (in seconds) to process
+# null = process entire file from start time
+# duration: null
+
+# Overwrite existing files (spectrograms, project.json)
+# true = overwrite without asking
+# false = error if files exist
+# overwrite: false
+
+# Use CPU encoding instead of GPU
+# true = use libx264 (CPU)
+# false = use h264_nvenc (GPU, if available)
+# cpu: false
+
+# Include audio in output video
+# true = combine original audio with video
+# false = silent video only
+# include_audio: true
+
+# ==============================================================================
+# EXAMPLE CONFIGURATIONS FOR DIFFERENT USE CASES
+# ==============================================================================
+
+# --- BIOACOUSTICS (Birds, Frogs, Insects) ---
+# audio_visualization:
+#   seconds_in_view: 30
+# mel_spectrogram:
+#   f_low: 500
+#   f_high: 12000
+#   n_mels: 512
+#   db_low: -80
+#   db_high: 0
+
+# --- MUSIC PRODUCTION ---
+# audio_visualization:
+#   seconds_in_view: 60
+# mel_spectrogram:
+#   f_low: 20
+#   f_high: 20000
+#   n_mels: 256
+#   db_low: -70
+#   db_high: 0
+
+# --- ULTRASONIC (Bats, Sonar) ---
+# audio_visualization:
+#   seconds_in_view: 10
+# mel_spectrogram:
+#   f_low: 10000
+#   f_high: 120000
+#   n_mels: 512
+#   db_low: -70
+#   db_high: 0
+
+# --- VOICE/SPEECH ANALYSIS ---
+# audio_visualization:
+#   seconds_in_view: 15
+# mel_spectrogram:
+#   f_low: 80
+#   f_high: 8000
+#   n_mels: 256
+#   db_low: -60
+#   db_high: 0
+
+# ==============================================================================
+# AMBISONIC AUDIO NOTES
+# ==============================================================================
+# The pipeline automatically detects and handles Zoom H3-VR ambisonic recordings:
+#
+# - A-Format (raw capsule signals): Automatically converted to B-Format,
+#   then W channel extracted for mono visualization
+#
+# - B-Format/AmbiX (W, Y, Z, X): W channel (omnidirectional) automatically
+#   extracted for mono visualization
+#
+# - Regular mono/stereo files: Processed normally with librosa's default
+#   mono conversion
+#
+# No manual conversion needed - detection happens automatically based on
+# WAV metadata (Rec Mode, channel count, channel labels).
+#
+# The video output can include the original ambisonic audio (--include_audio),
+# while the spectrogram visualization uses only the W channel.
+# ==============================================================================
