@@ -1324,14 +1324,15 @@ def spectrograms(
         else:
             image_width = max_spectrogram_width
 
+        # Use imshow instead of specshow for better interpolation control
         plt.figure(figsize=(image_width / 100, video.get("height", 100) / 100))
-        librosa.display.specshow(
+        ax = plt.gca()
+        img = ax.imshow(
             s_db,
-            sr=target_sr,
+            aspect='auto',
+            origin='lower',
             cmap=audiovis.get("cmap", "magma"),
-            hop_length=melspec.get("hop_length", 512),
-            fmin=melspec.get("f_low", 0),
-            fmax=melspec.get("f_high", target_sr / 2),
+            interpolation=audiovis.get("interpolation", "bilinear"),  # Smooth out horizontal banding
         )
         plt.axis("off")
         plt.tight_layout(pad=0)
