@@ -48,3 +48,6 @@ Contributions to improve the tool or extend its capabilities are welcome. Please
 License
 
 Specify the license under which the software is released.
+
+## Changelog
+See [CHANGELOG.md](CHANGELOG.md).
