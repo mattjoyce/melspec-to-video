@@ -1,6 +1,6 @@
 audio_visualization:
   audio_visual_span: 1
-  cmap: YlGnBu
+  cmap: viridis
   max_spectrogram_width: 10000
   playhead_position: 0.25  # Centered horizontally
   playhead_rgba: [255,255,255,192] # white, slightly transparent
